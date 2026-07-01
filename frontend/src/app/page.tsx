@@ -5,7 +5,7 @@ import axios from "axios";
 import { 
   Play, RotateCw, AlertCircle, Globe, ShieldAlert,
   Clock, Activity, ShieldCheck, Check, Server, Terminal, List, Search,
-  Pause, Trash2, StopCircle
+  Pause, Trash2, StopCircle, Download
 } from "lucide-react";
 
 // Configure base API url
@@ -88,6 +88,37 @@ export default function Dashboard() {
   const [crawledUrls, setCrawledUrls] = useState<CrawledUrl[]>([]);
   const [filterCategory, setFilterCategory] = useState<string>("all");
   const [searchTerm, setSearchTerm] = useState("");
+
+  // Export audited URLs to CSV
+  const downloadCsv = () => {
+    if (crawledUrls.length === 0) return;
+    const headers = ["URL", "Status Code", "Status Category", "Response Time (ms)", "Content Type", "Canonical URL", "Indexable", "Images Count", "Missing Alt Images"];
+    const rows = crawledUrls.map(u => {
+      const imagesCount = u.metadata?.images?.length || 0;
+      const missingAltCount = u.metadata?.images?.filter((i: any) => !i.alt).length || 0;
+      return [
+        `"${u.url.replace(/"/g, '""')}"`,
+        u.status_code !== null ? u.status_code : "",
+        u.status_category || "",
+        u.response_time_ms !== null ? u.response_time_ms : "",
+        u.content_type || "",
+        u.canonical_url ? `"${u.canonical_url.replace(/"/g, '""')}"` : "",
+        u.is_indexable === null ? "" : u.is_indexable ? "True" : "False",
+        imagesCount,
+        missingAltCount
+      ];
+    });
+    
+    const csvString = [headers.join(","), ...rows.map(e => e.join(","))].join("\n");
+    const blob = new Blob([csvString], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `${jobDetails?.domain || "crawl"}_audit_report.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   // Load jobs list
   const loadJobs = async () => {
@@ -244,9 +275,11 @@ export default function Dashboard() {
   const filteredUrls = crawledUrls.filter(u => {
     const matchesSearch = u.url.toLowerCase().includes(searchTerm.toLowerCase());
     if (filterCategory === "all") return matchesSearch;
-    if (filterCategory === "success") return u.status_category === "success" && matchesSearch;
-    if (filterCategory === "redirect") return u.status_category === "redirect" && matchesSearch;
-    if (filterCategory === "error") return (u.status_category === "client_error" || u.status_category === "server_error" || u.status_category === "timeout" || u.status_category === "dns_error") && matchesSearch;
+    if (filterCategory === "success") return (u.status_category === "success" || (u.status_code && u.status_code >= 200 && u.status_code < 300)) && matchesSearch;
+    if (filterCategory === "3xx") return (u.status_category === "redirect" || (u.status_code && u.status_code >= 300 && u.status_code < 400)) && matchesSearch;
+    if (filterCategory === "4xx") return (u.status_category === "client_error" || (u.status_code && u.status_code >= 400 && u.status_code < 500)) && matchesSearch;
+    if (filterCategory === "5xx") return (u.status_category === "server_error" || (u.status_code && u.status_code >= 500)) && matchesSearch;
+    if (filterCategory === "error") return (u.status_category === "client_error" || u.status_category === "server_error" || u.status_category === "timeout" || u.status_category === "dns_error" || (u.status_code && u.status_code >= 400)) && matchesSearch;
     return matchesSearch;
   });
 
@@ -566,18 +599,20 @@ export default function Dashboard() {
                   <div className="relative flex items-center justify-center">
                     <div className="h-28 w-28 rounded-full border-4 border-slate-850 flex flex-col items-center justify-center bg-slate-900/50">
                       <span className="text-4xl font-extrabold text-white">
-                        {jobDetails.stats?.health_score !== null ? jobDetails.stats?.health_score : "-"}
+                        {jobDetails.stats?.health_score !== null && jobDetails.stats?.health_score !== undefined ? jobDetails.stats.health_score : "-"}
                       </span>
                       <span className="text-[10px] text-slate-400">/ 100</span>
                     </div>
                   </div>
                   <div className="mt-4 text-xs text-center text-slate-400">
-                    {jobDetails.stats?.health_score && jobDetails.stats.health_score > 90 ? (
-                      <span className="text-emerald-400 flex items-center gap-1"><ShieldCheck className="h-3.5 w-3.5" /> Excellent SEO Health</span>
-                    ) : jobDetails.stats?.health_score && jobDetails.stats.health_score > 60 ? (
-                      <span className="text-amber-400 flex items-center gap-1"><AlertCircle className="h-3.5 w-3.5" /> Warning: Fix issues</span>
-                    ) : jobDetails.stats?.health_score ? (
-                      <span className="text-red-400 flex items-center gap-1"><ShieldAlert className="h-3.5 w-3.5" /> Critical issues detected</span>
+                    {jobDetails.stats?.health_score !== null && jobDetails.stats?.health_score !== undefined ? (
+                      jobDetails.stats.health_score > 90 ? (
+                        <span className="text-emerald-400 flex items-center gap-1"><ShieldCheck className="h-3.5 w-3.5" /> Excellent SEO Health</span>
+                      ) : jobDetails.stats.health_score > 60 ? (
+                        <span className="text-amber-400 flex items-center gap-1"><AlertCircle className="h-3.5 w-3.5" /> Warning: Fix issues</span>
+                      ) : (
+                        <span className="text-red-400 flex items-center gap-1"><ShieldAlert className="h-3.5 w-3.5" /> Critical issues detected</span>
+                      )
                     ) : (
                       <span>Awaiting audits...</span>
                     )}
@@ -589,7 +624,7 @@ export default function Dashboard() {
                   <div>
                     <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400">Crawl Progress</h3>
                     <div className="text-3xl font-extrabold text-white mt-2">
-                      {jobDetails.progress.total_urls_checked} <span className="text-lg text-slate-500 font-normal">/ {jobDetails.progress.total_urls_found} URLs</span>
+                      {jobDetails.progress.total_urls_checked} <span className="text-lg text-slate-500 font-normal">/ {Math.max(jobDetails.progress.total_urls_found, jobDetails.progress.total_urls_checked, crawledUrls.length)} URLs</span>
                     </div>
                   </div>
                   <div className="mt-4">
@@ -598,16 +633,16 @@ export default function Dashboard() {
                         className="bg-indigo-500 h-full rounded-full transition-all duration-300"
                         style={{
                           width: `${
-                            jobDetails.progress.total_urls_found > 0
-                              ? (jobDetails.progress.total_urls_checked / jobDetails.progress.total_urls_found) * 100
+                            Math.max(jobDetails.progress.total_urls_found, jobDetails.progress.total_urls_checked, crawledUrls.length) > 0
+                              ? (jobDetails.progress.total_urls_checked / Math.max(jobDetails.progress.total_urls_found, jobDetails.progress.total_urls_checked, crawledUrls.length)) * 100
                               : 0
                           }%`,
                         }}
                       ></div>
                     </div>
                     <div className="flex justify-between text-xs text-slate-500 mt-2">
-                      <span>Indexability: {jobDetails.progress.urls_2xx} Indexable</span>
-                      <span>{jobDetails.progress.total_urls_found > 0 ? Math.round((jobDetails.progress.total_urls_checked / jobDetails.progress.total_urls_found) * 100) : 0}%</span>
+                      <span>Sitemaps Found: {jobDetails.progress.total_urls_found}</span>
+                      <span>{Math.max(jobDetails.progress.total_urls_found, jobDetails.progress.total_urls_checked, crawledUrls.length) > 0 ? Math.round((jobDetails.progress.total_urls_checked / Math.max(jobDetails.progress.total_urls_found, jobDetails.progress.total_urls_checked, crawledUrls.length)) * 100) : 0}%</span>
                     </div>
                   </div>
                 </div>
@@ -690,9 +725,19 @@ export default function Dashboard() {
                       >
                         <option value="all">All Statuses</option>
                         <option value="success">Success (2xx)</option>
-                        <option value="redirect">Redirects (3xx)</option>
-                        <option value="error">Errors (4xx/5xx/Failures)</option>
+                        <option value="3xx">Redirects (3xx)</option>
+                        <option value="4xx">Client Errors (4xx)</option>
+                        <option value="5xx">Server Errors (5xx)</option>
+                        <option value="error">All Errors/Failures</option>
                       </select>
+                      <button
+                        onClick={downloadCsv}
+                        className="flex items-center space-x-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 px-3 py-1.5 text-xs font-semibold text-white transition focus:outline-none"
+                        title="Download CSV report"
+                      >
+                        <Download className="h-3.5 w-3.5" />
+                        <span>Download CSV</span>
+                      </button>
                     </div>
                   </div>
 
