@@ -1,43 +1,6 @@
 version: '3.9'
 
 services:
-  # PostgreSQL Database
-  postgres:
-    image: postgres:15-alpine
-    container_name: crawler-postgres
-    environment:
-      POSTGRES_DB: ${DB_NAME:-crawler_db}
-      POSTGRES_USER: ${DB_USER:-postgres}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - crawler-network
-
-  # Redis (Queue + Cache)
-  redis:
-    image: redis:7-alpine
-    container_name: crawler-redis
-    command: redis-server --appendonly yes
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - crawler-network
-
   # FastAPI Backend
   backend:
     build:
@@ -45,19 +8,15 @@ services:
       dockerfile: Dockerfile
     container_name: crawler-backend
     environment:
-      DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@postgres:5432/${DB_NAME:-crawler_db}
-      REDIS_URL: redis://redis:6379/0
+      MONGODB_URL: ${MONGODB_URL}
+      REDIS_URL: ${REDIS_URL}
       ENVIRONMENT: ${ENVIRONMENT:-development}
       DEBUG: ${DEBUG:-true}
       SECRET_KEY: ${SECRET_KEY:-dev-secret-key-change-in-production}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
     ports:
       - "8000:8000"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+    depends_on: []
     volumes:
       - ./backend:/app
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
@@ -71,12 +30,10 @@ services:
       dockerfile: Dockerfile
     container_name: crawler-celery-worker
     environment:
-      DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@postgres:5432/${DB_NAME:-crawler_db}
-      REDIS_URL: redis://redis:6379/0
+      MONGODB_URL: ${MONGODB_URL}
+      REDIS_URL: ${REDIS_URL}
       ENVIRONMENT: ${ENVIRONMENT:-development}
     depends_on:
-      - postgres
-      - redis
       - backend
     volumes:
       - ./backend:/app
@@ -91,12 +48,11 @@ services:
       dockerfile: Dockerfile
     container_name: crawler-celery-beat
     environment:
-      DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@postgres:5432/${DB_NAME:-crawler_db}
-      REDIS_URL: redis://redis:6379/0
+      MONGODB_URL: ${MONGODB_URL}
+      REDIS_URL: ${REDIS_URL}
       ENVIRONMENT: ${ENVIRONMENT:-development}
     depends_on:
       - postgres
-      - redis
       - backend
     volumes:
       - ./backend:/app
@@ -125,8 +81,6 @@ services:
       - crawler-network
 
 volumes:
-  postgres_data:
-  redis_data:
 
 networks:
   crawler-network:

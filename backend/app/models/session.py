@@ -1,23 +1,21 @@
 import uuid
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import ForeignKey, String, Boolean, DateTime
-from sqlalchemy.orm import Mapped, mapped_column, relationship
-from app.database.base import Base
+from beanie import Document, Indexed
+from pydantic import Field
 
-class Session(Base):
-    __tablename__ = "sessions"
 
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    
-    token: Mapped[str] = mapped_column(String(500), nullable=False)
-    ip_address: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
-    user_agent: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+class Session(Document):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4)
+    user_id: uuid.UUID
 
-    # Relationships
-    user = relationship("User", back_populates="sessions")
+    token: str
+    ip_address: Optional[str] = None
+    user_agent: Optional[str] = None
+    is_active: bool = True
+
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    expires_at: datetime
+
+    class Settings:
+        name = "sessions"

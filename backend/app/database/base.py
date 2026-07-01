@@ -1,5 +1,3 @@
-from sqlalchemy.orm import DeclarativeBase
-
-class Base(DeclarativeBase):
-    """Base class for all SQLAlchemy ORM models."""
+class Base:
+    """Dummy base class for reference (SQLAlchemy was replaced by Beanie)."""
     pass

@@ -27,20 +27,15 @@ class Settings(BaseSettings):
             return v
         raise ValueError(v)
 
-    # Database Settings
-    DB_HOST: str = "postgres"
-    DB_PORT: int = 5432
-    DB_USER: str = "postgres"
-    DB_PASSWORD: str = "postgres"
-    DB_NAME: str = "crawler_db"
-    DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@postgres:5432/crawler_db"
+    # Database Settings (MongoDB)
+    MONGODB_URL: str = "mongodb://localhost:27017/WEB_CRAWL"
 
-    # Redis
-    REDIS_URL: str = "redis://redis:6379/0"
+    # Redis (Upstash)
+    REDIS_URL: str = "redis://localhost:6379/0"
 
-    # Celery
-    CELERY_BROKER_URL: str = "redis://redis:6379/0"
-    CELERY_RESULT_BACKEND: str = "redis://redis:6379/0"
+    # Celery (Upstash Redis)
+    CELERY_BROKER_URL: str = "redis://localhost:6379/0"
+    CELERY_RESULT_BACKEND: str = "redis://localhost:6379/0"
 
     # JWT Authentication
     JWT_ALGORITHM: str = "HS256"

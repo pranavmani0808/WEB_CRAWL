@@ -21,5 +21,6 @@ COPY . .
 # Expose backend port
 EXPOSE 8000
 
-# Default command will be overwritten by docker-compose
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Default command; docker-compose overrides this for worker/beat services.
+# Railway injects $PORT at runtime, so use shell form to expand it.
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]

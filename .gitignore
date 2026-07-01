@@ -143,6 +143,9 @@ out/
 .env.test.local
 .env.production.local
 
+# Celery beat runtime state
+celerybeat-schedule*
+
 # IDEs
 .vscode/
 .idea/

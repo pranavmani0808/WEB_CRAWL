@@ -1,35 +1,31 @@
 import uuid
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import ForeignKey, DateTime, Integer
-from sqlalchemy.orm import Mapped, mapped_column, relationship
-from app.database.base import Base
+from beanie import Document, Indexed
+from pydantic import Field
 
-class CrawlComparison(Base):
-    __tablename__ = "crawl_comparison"
 
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    domain_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("domains.id", ondelete="CASCADE"), nullable=False, index=True)
-    
+class CrawlComparison(Document):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4)
+    domain_id: uuid.UUID = Indexed()
+
     # Crawls being compared
-    previous_crawl_job_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("crawl_jobs.id", ondelete="SET NULL"), nullable=True)
-    current_crawl_job_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("crawl_jobs.id", ondelete="CASCADE"), nullable=False)
-    
-    # Changes
-    urls_added: Mapped[int] = mapped_column(Integer, default=0)
-    urls_removed: Mapped[int] = mapped_column(Integer, default=0)
-    new_broken_urls: Mapped[int] = mapped_column(Integer, default=0)
-    fixed_broken_urls: Mapped[int] = mapped_column(Integer, default=0)
-    new_redirects: Mapped[int] = mapped_column(Integer, default=0)
-    removed_redirects: Mapped[int] = mapped_column(Integer, default=0)
-    
-    # Health change
-    health_score_change: Mapped[int] = mapped_column(Integer, default=0) # difference in health score
-    
-    # Timestamps
-    compared_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    previous_crawl_job_id: Optional[uuid.UUID] = None
+    current_crawl_job_id: uuid.UUID
 
-    # Relationships
-    domain = relationship("Domain", back_populates="crawl_comparisons")
-    previous_crawl_job = relationship("CrawlJob", foreign_keys=[previous_crawl_job_id])
-    current_crawl_job = relationship("CrawlJob", foreign_keys=[current_crawl_job_id])
+    # Changes
+    urls_added: int = 0
+    urls_removed: int = 0
+    new_broken_urls: int = 0
+    fixed_broken_urls: int = 0
+    new_redirects: int = 0
+    removed_redirects: int = 0
+
+    # Health change
+    health_score_change: int = 0  # difference in health score
+
+    # Timestamps
+    compared_at: datetime = Field(default_factory=datetime.utcnow)
+
+    class Settings:
+        name = "crawl_comparison"

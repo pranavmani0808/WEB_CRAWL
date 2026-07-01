@@ -1,9 +1,9 @@
-from fastapi import FastAPI, Request, status, Depends
+from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from app.core.config import settings
 from app.core.exceptions import CrawlerException
-from app.database.database import get_db
+from app.database.database import init_db, close_db
 from app.models.domain import Domain
 from app.models.crawl_job import CrawlJob
 from app.models.url import URL
@@ -13,9 +13,6 @@ from app.workers.tasks import crawl_domain_task
 import uuid
 from urllib.parse import urlparse
 from pydantic import BaseModel
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc
-from sqlalchemy.orm import selectinload
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -23,6 +20,15 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
 )
+
+# MongoDB Lifecycle
+@app.on_event("startup")
+async def startup_db():
+    await init_db()
+
+@app.on_event("shutdown")
+async def shutdown_db():
+    await close_db()
 
 # CORS Setup
 origins = []
@@ -105,22 +111,20 @@ class CrawlRequest(BaseModel):
     url: str
 
 @app.post("/api/crawl", tags=["Crawl"])
-async def start_crawl_endpoint(req: CrawlRequest, db: AsyncSession = Depends(get_db)):
+async def start_crawl_endpoint(req: CrawlRequest):
     """Start a crawl job for the specified URL"""
     url = req.url.strip()
     if not url.startswith(('http://', 'https://')):
         url = 'https://' + url
-    
+
     parsed = urlparse(url)
     domain_name = parsed.netloc or parsed.path.split('/')[0]
-    
+
     # Mock a default user ID for development
     user_id = uuid.UUID("00000000-0000-0000-0000-000000000000")
-    
+
     # Ensure default user exists
-    user_stmt = select(User).where(User.id == user_id)
-    user_res = await db.execute(user_stmt)
-    user = user_res.scalar_one_or_none()
+    user = await User.find_one(User.id == user_id)
     if not user:
         user = User(
             id=user_id,
@@ -128,25 +132,22 @@ async def start_crawl_endpoint(req: CrawlRequest, db: AsyncSession = Depends(get
             username="developer",
             password_hash="dev-hash"
         )
-        db.add(user)
-        await db.flush()
+        await user.insert()
 
     # Get or create Domain
-    stmt = select(Domain).where(Domain.normalized_url == f"{parsed.scheme}://{domain_name}")
-    result = await db.execute(stmt)
-    domain = result.scalar_one_or_none()
-    
+    normalized_url = f"{parsed.scheme}://{domain_name}"
+    domain = await Domain.find_one(Domain.normalized_url == normalized_url)
+
     if not domain:
         domain = Domain(
             user_id=user_id,
             original_url=url,
-            normalized_url=f"{parsed.scheme}://{domain_name}",
+            normalized_url=normalized_url,
             domain=domain_name,
             status="pending"
         )
-        db.add(domain)
-        await db.flush()
-    
+        await domain.insert()
+
     # Create Crawl Job
     job = CrawlJob(
         domain_id=domain.id,
@@ -157,58 +158,60 @@ async def start_crawl_endpoint(req: CrawlRequest, db: AsyncSession = Depends(get
         respect_robots_txt=settings.CRAWLER_RESPECT_ROBOTS_TXT,
         follow_redirects=settings.CRAWLER_FOLLOW_REDIRECTS
     )
-    db.add(job)
-    await db.commit()
-    
+    await job.insert()
+
     # Dispatch Celery task
     crawl_domain_task.delay(str(job.id))
-    
+
     return {"job_id": str(job.id), "domain_id": str(domain.id)}
 
 @app.get("/api/crawl/jobs", tags=["Crawl"])
-async def list_crawl_jobs(db: AsyncSession = Depends(get_db)):
+async def list_crawl_jobs():
     """List all crawl jobs with associated domains"""
-    stmt = select(CrawlJob).options(selectinload(CrawlJob.domain)).order_by(desc(CrawlJob.created_at))
-    result = await db.execute(stmt)
-    jobs = result.scalars().all()
-    return [{
-        "id": str(j.id),
-        "status": j.status,
-        "domain": j.domain.domain,
-        "url": j.domain.original_url,
-        "total_urls_found": j.total_urls_found,
-        "total_urls_checked": j.total_urls_checked,
-        "created_at": j.created_at.isoformat()
-    } for j in jobs]
+    jobs = await CrawlJob.find().sort("created_at", -1).to_list(None)
+
+    result = []
+    for j in jobs:
+        domain = await Domain.get(j.domain_id)
+        result.append({
+            "id": str(j.id),
+            "status": j.status,
+            "domain": domain.domain if domain else "unknown",
+            "url": domain.original_url if domain else "unknown",
+            "total_urls_found": j.total_urls_found,
+            "total_urls_checked": j.total_urls_checked,
+            "created_at": j.created_at.isoformat()
+        })
+
+    return result
 
 @app.get("/api/crawl/jobs/{job_id}", tags=["Crawl"])
-async def get_crawl_job(job_id: str, db: AsyncSession = Depends(get_db)):
+async def get_crawl_job(job_id: str):
     """Get details, stats and logs for a specific crawl job"""
     try:
         job_uuid = uuid.UUID(job_id)
     except ValueError:
         return JSONResponse(status_code=400, content={"message": "Invalid job ID format"})
 
-    stmt = select(CrawlJob).where(CrawlJob.id == job_uuid).options(
-        selectinload(CrawlJob.domain),
-        selectinload(CrawlJob.statistics)
-    )
-    result = await db.execute(stmt)
-    job = result.scalar_one_or_none()
-    
+    job = await CrawlJob.get(job_uuid)
+
     if not job:
         return JSONResponse(status_code=404, content={"message": "Job not found"})
 
+    # Fetch domain
+    domain = await Domain.get(job.domain_id)
+
     # Fetch logs
-    log_stmt = select(CrawlLog).where(CrawlLog.crawl_job_id == job_uuid).order_by(CrawlLog.timestamp)
-    log_res = await db.execute(log_stmt)
-    logs = log_res.scalars().all()
+    logs = await CrawlLog.find(CrawlLog.crawl_job_id == job_uuid).sort("timestamp", 1).to_list(None)
+
+    # Fetch statistics
+    stats = await CrawlStatistics.find_one(CrawlStatistics.crawl_job_id == job_uuid)
 
     return {
         "id": str(job.id),
         "status": job.status,
-        "domain": job.domain.domain,
-        "url": job.domain.original_url,
+        "domain": domain.domain if domain else "unknown",
+        "url": domain.original_url if domain else "unknown",
         "started_at": job.started_at.isoformat() if job.started_at else None,
         "completed_at": job.completed_at.isoformat() if job.completed_at else None,
         "stages": {
@@ -233,10 +236,10 @@ async def get_crawl_job(job_id: str, db: AsyncSession = Depends(get_db)):
             "urls_dns_error": job.urls_dns_error
         },
         "stats": {
-            "health_score": job.statistics[0].health_score if job.statistics else None,
+            "health_score": stats.health_score if stats else None,
             "avg_response_time_ms": job.avg_response_time_ms,
             "speed_urls_per_sec": float(job.crawl_speed_urls_per_sec) if job.crawl_speed_urls_per_sec else 0.0
-        } if job.statistics else None,
+        } if stats else None,
         "logs": [{
             "timestamp": l.timestamp.isoformat(),
             "level": l.level,
@@ -245,25 +248,20 @@ async def get_crawl_job(job_id: str, db: AsyncSession = Depends(get_db)):
     }
 
 @app.get("/api/crawl/jobs/{job_id}/urls", tags=["Crawl"])
-async def list_job_urls(job_id: str, db: AsyncSession = Depends(get_db)):
+async def list_job_urls(job_id: str):
     """List all URLs crawled for a specific job"""
     try:
         job_uuid = uuid.UUID(job_id)
     except ValueError:
         return JSONResponse(status_code=400, content={"message": "Invalid job ID format"})
 
-    # Fetch job domain
-    stmt = select(CrawlJob.domain_id).where(CrawlJob.id == job_uuid)
-    res = await db.execute(stmt)
-    domain_id = res.scalar_one_or_none()
-
-    if not domain_id:
+    # Fetch job
+    job = await CrawlJob.get(job_uuid)
+    if not job:
         return JSONResponse(status_code=404, content={"message": "Job not found"})
 
-    # Fetch URLs
-    url_stmt = select(URL).where(URL.domain_id == domain_id).order_by(URL.url)
-    url_res = await db.execute(url_stmt)
-    urls = url_res.scalars().all()
+    # Fetch URLs for this domain
+    urls = await URL.find(URL.domain_id == job.domain_id).sort("url", 1).to_list(None)
 
     return [{
         "id": str(u.id),
@@ -280,16 +278,14 @@ async def list_job_urls(job_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @app.post("/api/crawl/jobs/{job_id}/retry", tags=["Crawl"])
-async def retry_crawl_job(job_id: str, db: AsyncSession = Depends(get_db)):
+async def retry_crawl_job(job_id: str):
     """Re-dispatch a stuck or failed crawl job back into the Celery queue."""
     try:
         job_uuid = uuid.UUID(job_id)
     except ValueError:
         return JSONResponse(status_code=400, content={"message": "Invalid job ID format"})
 
-    stmt = select(CrawlJob).where(CrawlJob.id == job_uuid)
-    result = await db.execute(stmt)
-    job = result.scalar_one_or_none()
+    job = await CrawlJob.get(job_uuid)
 
     if not job:
         return JSONResponse(status_code=404, content={"message": "Job not found"})
@@ -306,7 +302,7 @@ async def retry_crawl_job(job_id: str, db: AsyncSession = Depends(get_db)):
     job.urls_dns_error = 0
     job.started_at = None
     job.completed_at = None
-    await db.commit()
+    await job.save()
 
     # Re-dispatch Celery task
     crawl_domain_task.delay(str(job.id))
@@ -314,11 +310,9 @@ async def retry_crawl_job(job_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @app.post("/api/crawl/jobs/retry-pending", tags=["Crawl"])
-async def retry_all_pending_jobs(db: AsyncSession = Depends(get_db)):
+async def retry_all_pending_jobs():
     """Re-dispatch all jobs currently stuck in pending state."""
-    stmt = select(CrawlJob).where(CrawlJob.status == "pending")
-    result = await db.execute(stmt)
-    jobs = result.scalars().all()
+    jobs = await CrawlJob.find(CrawlJob.status == "pending").to_list(None)
 
     dispatched = []
     for job in jobs:
@@ -329,16 +323,14 @@ async def retry_all_pending_jobs(db: AsyncSession = Depends(get_db)):
 
 
 @app.post("/api/crawl/jobs/{job_id}/pause", tags=["Crawl"])
-async def pause_crawl_job(job_id: str, db: AsyncSession = Depends(get_db)):
+async def pause_crawl_job(job_id: str):
     """Pause a running crawl job by marking its status as paused."""
     try:
         job_uuid = uuid.UUID(job_id)
     except ValueError:
         return JSONResponse(status_code=400, content={"message": "Invalid job ID format"})
 
-    stmt = select(CrawlJob).where(CrawlJob.id == job_uuid)
-    result = await db.execute(stmt)
-    job = result.scalar_one_or_none()
+    job = await CrawlJob.get(job_uuid)
 
     if not job:
         return JSONResponse(status_code=404, content={"message": "Job not found"})
@@ -350,21 +342,19 @@ async def pause_crawl_job(job_id: str, db: AsyncSession = Depends(get_db)):
         )
 
     job.status = "paused"
-    await db.commit()
+    await job.save()
     return {"message": "Job paused", "job_id": str(job.id)}
 
 
 @app.post("/api/crawl/jobs/{job_id}/resume", tags=["Crawl"])
-async def resume_crawl_job(job_id: str, db: AsyncSession = Depends(get_db)):
+async def resume_crawl_job(job_id: str):
     """Resume a paused crawl job by re-dispatching it."""
     try:
         job_uuid = uuid.UUID(job_id)
     except ValueError:
         return JSONResponse(status_code=400, content={"message": "Invalid job ID format"})
 
-    stmt = select(CrawlJob).where(CrawlJob.id == job_uuid)
-    result = await db.execute(stmt)
-    job = result.scalar_one_or_none()
+    job = await CrawlJob.get(job_uuid)
 
     if not job:
         return JSONResponse(status_code=404, content={"message": "Job not found"})
@@ -376,31 +366,27 @@ async def resume_crawl_job(job_id: str, db: AsyncSession = Depends(get_db)):
         )
 
     job.status = "pending"
-    await db.commit()
+    await job.save()
     crawl_domain_task.delay(str(job.id))
     return {"message": "Job resumed", "job_id": str(job.id)}
 
 
 @app.delete("/api/crawl/jobs/{job_id}", tags=["Crawl"])
-async def delete_crawl_job(job_id: str, db: AsyncSession = Depends(get_db)):
+async def delete_crawl_job(job_id: str):
     """Permanently delete a crawl job and all associated data."""
-    from sqlalchemy import delete as sql_delete
     try:
         job_uuid = uuid.UUID(job_id)
     except ValueError:
         return JSONResponse(status_code=400, content={"message": "Invalid job ID format"})
 
-    stmt = select(CrawlJob).where(CrawlJob.id == job_uuid)
-    result = await db.execute(stmt)
-    job = result.scalar_one_or_none()
+    job = await CrawlJob.get(job_uuid)
 
     if not job:
         return JSONResponse(status_code=404, content={"message": "Job not found"})
 
     # Delete associated logs
-    await db.execute(sql_delete(CrawlLog).where(CrawlLog.crawl_job_id == job_uuid))
-    # Delete the job itself (cascades to statistics if configured)
-    await db.delete(job)
-    await db.commit()
+    await CrawlLog.delete_many(CrawlLog.crawl_job_id == job_uuid)
+    # Delete the job itself
+    await job.delete()
     return {"message": "Job deleted", "job_id": job_id}
 

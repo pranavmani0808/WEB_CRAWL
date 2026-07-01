@@ -3,34 +3,21 @@ import uuid
 import logging
 from app.workers.celery_app import celery_app
 from app.crawler.crawler_engine import CrawlerEngine
-from app.core.config import settings
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from app.database.database import init_db, close_db
 
 logger = logging.getLogger(__name__)
 
 
 async def _run_crawl(crawl_job_id: uuid.UUID):
-    """Create a fresh DB engine & session factory per task, then run the engine."""
-    # A new engine must be created inside the event loop so asyncpg attaches to it correctly.
-    engine = create_async_engine(
-        settings.DATABASE_URL,
-        echo=False,
-        pool_pre_ping=True,
-        pool_size=5,
-        max_overflow=10,
-    )
-    session_factory = async_sessionmaker(
-        bind=engine,
-        class_=AsyncSession,
-        expire_on_commit=False,
-        autocommit=False,
-        autoflush=False,
-    )
+    """Initialize MongoDB connection and run the crawler engine."""
+    # Initialize Beanie connection for this task
+    await init_db()
+
     try:
-        crawler = CrawlerEngine(crawl_job_id, session_factory=session_factory)
+        crawler = CrawlerEngine(crawl_job_id)
         await crawler.execute()
     finally:
-        await engine.dispose()
+        await close_db()
 
 
 @celery_app.task(name="app.workers.tasks.crawl_domain_task", bind=True)

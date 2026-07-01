@@ -1,13 +1,14 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import String, DateTime
-from sqlalchemy.orm import Mapped, mapped_column
-from app.database.base import Base
+from beanie import Document, Indexed
+from pydantic import Field
 
-class TokenBlocklist(Base):
-    __tablename__ = "token_blocklist"
 
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    token: Mapped[str] = mapped_column(String(500), unique=True, index=True, nullable=False)
-    blacklisted_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+class TokenBlocklist(Document):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4)
+    token: str = Indexed(unique=True)
+    blacklisted_at: datetime = Field(default_factory=datetime.utcnow)
+    expires_at: datetime
+
+    class Settings:
+        name = "token_blocklist"

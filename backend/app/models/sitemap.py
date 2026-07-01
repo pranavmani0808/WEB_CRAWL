@@ -1,63 +1,48 @@
 import uuid
-from datetime import datetime, date, timezone
+from datetime import datetime, date
 from typing import Optional
-from sqlalchemy import ForeignKey, String, Boolean, DateTime, Integer, Date, Text, UniqueConstraint
-from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import Mapped, mapped_column, relationship
-from app.database.base import Base
+from beanie import Document, Indexed
+from pydantic import Field
 
-class Sitemap(Base):
-    __tablename__ = "sitemaps"
 
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    domain_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("domains.id", ondelete="CASCADE"), nullable=False)
-    subdomain_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("subdomains.id", ondelete="CASCADE"), nullable=True)
-    
+class Sitemap(Document):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4)
+    domain_id: uuid.UUID
+    subdomain_id: Optional[uuid.UUID] = None
+
     # Sitemap Details
-    sitemap_url: Mapped[str] = mapped_column(String(2048), unique=True, nullable=False)
-    
+    sitemap_url: str = Indexed(unique=True)
+
     # Type & Hierarchy
-    is_index: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
-    parent_sitemap_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("sitemaps.id", ondelete="CASCADE"), nullable=True)
-    
+    is_index: bool = Indexed(default=False)
+    parent_sitemap_id: Optional[uuid.UUID] = None
+
     # Discovery Source
-    discovered_from: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
-    
+    discovered_from: Optional[str] = None
+
     # Status
-    status: Mapped[str] = mapped_column(String(50), default="pending", index=True)
-    
+    status: str = Indexed(default="pending")
+
     # Content
-    url_count: Mapped[int] = mapped_column(Integer, default=0)
-    last_modified: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
-    response_code: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    
+    url_count: int = 0
+    last_modified: Optional[date] = None
+    response_code: Optional[int] = None
+
     # Timing
-    fetched_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    parsed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    fetch_time_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    
+    fetched_at: Optional[datetime] = None
+    parsed_at: Optional[datetime] = None
+    fetch_time_ms: Optional[int] = None
+
     # Error Handling
-    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    retry_count: Mapped[int] = mapped_column(Integer, default=0)
-    
+    error_message: Optional[str] = None
+    retry_count: int = 0
+
     # Timestamps
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, 
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow
-    )
-    
-    # Avoid conflict with SQLAlchemy's metadata attribute
-    meta_data: Mapped[dict] = mapped_column("metadata", JSONB, default=dict)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
 
-    # Relationships
-    domain = relationship("Domain", back_populates="sitemaps")
-    subdomain = relationship("Subdomain", back_populates="sitemaps")
-    parent_sitemap = relationship("Sitemap", remote_side=[id], back_populates="child_sitemaps")
-    child_sitemaps = relationship("Sitemap", back_populates="parent_sitemap", cascade="all, delete-orphan")
-    urls = relationship("URL", back_populates="sitemap", cascade="all, delete-orphan")
+    # Metadata
+    meta_data: dict = {}
 
-    __table_args__ = (
-        UniqueConstraint("sitemap_url", "domain_id", name="idx_sitemaps_url_unique"),
-    )
+    class Settings:
+        name = "sitemaps"

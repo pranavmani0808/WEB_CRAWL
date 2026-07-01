@@ -1,18 +1,13 @@
+from beanie import init_beanie, PydanticObjectId
 from motor.motor_asyncio import AsyncIOMotorClient as AsyncClient
-from beanie import init_beanie
 from app.core.config import settings
-
-# Global client reference
-_mongodb_client: AsyncClient = None
 
 
 async def init_db():
     """Initialize MongoDB connection and Beanie ODM."""
-    global _mongodb_client
+    client = AsyncClient(settings.MONGODB_URL)
 
-    _mongodb_client = AsyncClient(settings.MONGODB_URL)
-
-    # Import all models
+    # Import all models so Beanie can register them
     from app.models.user import User
     from app.models.domain import Domain
     from app.models.crawl_job import CrawlJob
@@ -29,7 +24,7 @@ async def init_db():
     from app.models.session import Session
 
     await init_beanie(
-        database=_mongodb_client.WEB_CRAWL,
+        database=client.WEB_CRAWL,
         document_models=[
             User, Domain, CrawlJob, URL, Sitemap, Subdomain,
             CrawlLog, CrawlStatistics, Report, Export,
@@ -37,20 +32,4 @@ async def init_db():
         ]
     )
 
-    return _mongodb_client
-
-
-async def close_db():
-    """Close MongoDB connection."""
-    global _mongodb_client
-    if _mongodb_client:
-        _mongodb_client.close()
-
-
-async def get_db():
-    """Dependency for API endpoints (returns None for Beanie).
-
-    With Beanie, documents can be accessed directly without a session.
-    This is kept for backwards compatibility with existing endpoint patterns.
-    """
-    return None
+    return client

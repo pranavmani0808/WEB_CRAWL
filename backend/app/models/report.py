@@ -1,33 +1,29 @@
 import uuid
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import ForeignKey, String, DateTime, Text, Integer
-from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import Mapped, mapped_column, relationship
-from app.database.base import Base
+from beanie import Document, Indexed
+from pydantic import Field
 
-class Report(Base):
-    __tablename__ = "reports"
 
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    domain_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("domains.id", ondelete="CASCADE"), nullable=False, index=True)
-    crawl_job_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("crawl_jobs.id", ondelete="SET NULL"), nullable=True)
-    
+class Report(Document):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4)
+    domain_id: uuid.UUID = Indexed()
+    crawl_job_id: Optional[uuid.UUID] = None
+
     # Report Type
-    report_type: Mapped[str] = mapped_column(String(100), index=True, nullable=False) # broken_pages, redirect_chains, etc.
-    
-    # Content
-    title: Mapped[str] = mapped_column(String(255), nullable=False)
-    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    data: Mapped[dict] = mapped_column(JSONB, default=dict) # Report-specific data
-    
-    # Counts
-    issues_count: Mapped[int] = mapped_column(Integer, default=0)
-    
-    # Timing
-    generated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    report_type: str = Indexed()  # broken_pages, redirect_chains, etc.
 
-    # Relationships
-    domain = relationship("Domain", back_populates="reports")
-    crawl_job = relationship("CrawlJob", back_populates="reports")
+    # Content
+    title: str
+    description: Optional[str] = None
+    data: dict = {}  # Report-specific data
+
+    # Counts
+    issues_count: int = 0
+
+    # Timing
+    generated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+    class Settings:
+        name = "reports"
