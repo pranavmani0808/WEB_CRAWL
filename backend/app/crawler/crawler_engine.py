@@ -422,12 +422,12 @@ class CrawlerEngine:
         await self.log_event("info", f"Queued {total_urls} URLs for HTTP checking", event_type="urls_queued", details={"urls_count": total_urls})
 
     async def _stage_http_checking(self, client: httpx.AsyncClient):
-        """Asynchronously crawl URLs using a pool-like model with concurrency limit"""
+        """Asynchronously crawl URLs dynamically using a polling queue with concurrency limit"""
         self.job.stage_http_checking = True
         await self.db.commit()
         await self.log_event("info", "Starting HTTP Checking stage", event_type="stage_http_checking_started")
 
-        # Query all pending URLs
+        # Get initial list of pending URLs
         stmt = select(URL).where(URL.domain_id == self.domain.id, URL.crawl_status == URLCrawlStatus.PENDING.value)
         result = await self.db.execute(stmt)
         urls = list(result.scalars().all())
@@ -436,20 +436,46 @@ class CrawlerEngine:
             await self.log_event("warning", "No pending URLs found for crawling.", event_type="no_urls_found")
             return
 
-        total_to_check = len(urls)
-        logger.info(f"Preparing to check {total_to_check} URLs using {self.job.max_workers} concurrent tasks.")
-
-        # Semaphore for max concurrency
+        # Keep track of active task set and overall scheduled URL strings
+        active_urls = set(u.url for u in urls)
+        running_tasks = set()
         sem = asyncio.Semaphore(self.job.max_workers)
-        
-        # We will check urls in batches or concurrently
-        async def crawl_task(url_obj: URL):
-            async with sem:
-                await self.rate_limiter.acquire_async()
-                await self._crawl_single_url(client, url_obj)
 
-        tasks = [crawl_task(u) for u in urls]
-        await asyncio.gather(*tasks)
+        async def crawl_and_release(url_to_crawl: URL):
+            try:
+                async with sem:
+                    await self.rate_limiter.acquire_async()
+                    await self._crawl_single_url(client, url_to_crawl)
+            finally:
+                running_tasks.discard(asyncio.current_task())
+
+        # Spawn initial tasks
+        for url_obj in urls:
+            task = asyncio.create_task(crawl_and_release(url_obj))
+            running_tasks.add(task)
+
+        # Main polling loop to check for new dynamically queued URLs
+        while True:
+            # Wait a short duration
+            await asyncio.sleep(0.1)
+
+            # Query database for new pending URLs
+            stmt = select(URL).where(URL.domain_id == self.domain.id, URL.crawl_status == URLCrawlStatus.PENDING.value)
+            result = await self.db.execute(stmt)
+            pending_urls = list(result.scalars().all())
+
+            # Filter out URLs already in queue or processing
+            new_urls = [u for u in pending_urls if u.url not in active_urls]
+
+            # If no pending URLs and no active crawl tasks remain, we are completely done!
+            if not new_urls and not running_tasks:
+                break
+
+            # Enqueue new tasks
+            for url_obj in new_urls:
+                active_urls.add(url_obj.url)
+                task = asyncio.create_task(crawl_and_release(url_obj))
+                running_tasks.add(task)
 
         # Force save final stats
         await self._update_job_progress()
@@ -497,10 +523,14 @@ class CrawlerEngine:
             # Extract SEO data outside the lock
             seo_data = None
             issues = []
+            soup = None
             if "text/html" in url_obj.content_type:
                 html_content = response.text
-                seo_data, soup = SEOExtractor.extract_all(html_content, url_obj.url, self.domain.domain, response_time_ms)
-                issues = self.issue_detector.detect_issues(seo_data)
+                try:
+                    seo_data, soup = SEOExtractor.extract_all(html_content, url_obj.url, self.domain.domain, response_time_ms)
+                    issues = self.issue_detector.detect_issues(seo_data)
+                except Exception as e:
+                    logger.error(f"Error parsing HTML for {url_obj.url}: {e}")
 
             # Log issues outside the lock to prevent deadlock
             for issue in issues:
@@ -528,6 +558,10 @@ class CrawlerEngine:
                 self.job.total_urls_checked += 1
                 self.domain.crawled_urls += 1
                 await self.db.commit()
+
+            # Queue discovered internal links outside lock
+            if soup:
+                await self._extract_and_queue_links(soup, url_obj.url)
 
         except httpx.TimeoutException as e:
             async with self.db_lock:
@@ -781,3 +815,93 @@ class CrawlerEngine:
 
         await self.db.commit()
         await self.log_event("info", f"Reporting completed. Health Score: {stats.health_score}", event_type="reporting_completed", details={"health_score": stats.health_score})
+
+    async def _get_or_create_spider_sitemap(self) -> uuid.UUID:
+        """Get or create a virtual sitemap entry for HTML link discovery"""
+        spider_url = f"https://{self.domain.domain}/html-spider"
+        
+        async with self.db_lock:
+            stmt = select(Sitemap).where(Sitemap.domain_id == self.domain.id, Sitemap.sitemap_url == spider_url)
+            res = await self.db.execute(stmt)
+            spider_sitemap = res.scalar_one_or_none()
+            
+            if not spider_sitemap:
+                spider_sitemap = Sitemap(
+                    id=uuid.uuid4(),
+                    domain_id=self.domain.id,
+                    sitemap_url=spider_url,
+                    is_index=False,
+                    discovered_from="spider",
+                    status="fetched",
+                    url_count=0
+                )
+                self.db.add(spider_sitemap)
+                await self.db.commit()
+                
+            return spider_sitemap.id
+
+    async def _extract_and_queue_links(self, soup, current_url: str):
+        """Extract all internal links from soup and queue them as pending if not already existing"""
+        from urllib.parse import urljoin, urlparse
+        
+        # Enforce max limit of 10,000 URLs to avoid infinite crawl loops
+        if self.job.total_urls_found >= 10000:
+            return
+
+        links = soup.find_all('a', href=True)
+        new_urls = []
+        
+        for link in links:
+            href = link.get('href', '').strip()
+            if not href or href.startswith(('#', 'mailto:', 'tel:', 'javascript:')):
+                continue
+                
+            # Make absolute URL
+            absolute_url = urljoin(current_url, href)
+            parsed = urlparse(absolute_url)
+            
+            if parsed.scheme not in ('http', 'https'):
+                continue
+                
+            # Clean URL (strip fragment/hash)
+            clean_url = parsed._replace(fragment='').geturl()
+            
+            # Check domain matching (only internal links)
+            url_domain_clean = parsed.netloc.replace('www.', '', 1).lower()
+            base_domain_clean = self.domain.domain.replace('www.', '', 1).lower()
+            
+            if url_domain_clean == base_domain_clean:
+                new_urls.append(clean_url)
+                
+        if not new_urls:
+            return
+            
+        # Get spider sitemap ID
+        spider_sitemap_id = await self._get_or_create_spider_sitemap()
+        
+        # Deduplicate and check database
+        async with self.db_lock:
+            # Recheck limit inside the lock to be safe
+            if self.job.total_urls_found >= 10000:
+                return
+
+            for url_str in set(new_urls):
+                url_clean_hash = get_url_hash(url_str)
+                stmt = select(URL.id).where(URL.domain_id == self.domain.id, URL.url_hash == url_clean_hash)
+                res = await self.db.execute(stmt)
+                if not res.scalar_one_or_none():
+                    new_url_obj = URL(
+                        id=uuid.uuid4(),
+                        domain_id=self.domain.id,
+                        sitemap_id=spider_sitemap_id,
+                        url=url_str,
+                        url_hash=url_clean_hash,
+                        crawl_status=URLCrawlStatus.PENDING.value,
+                        metadata={}
+                    )
+                    self.db.add(new_url_obj)
+                    self.job.total_urls_found += 1
+                    
+                    if self.job.total_urls_found >= 10000:
+                        break
+            await self.db.commit()
