@@ -39,9 +39,12 @@ if "http://localhost:3000" not in origins and "*" not in origins:
 if "*" in origins:
     origins = ["*"]
 
+import re
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -50,7 +53,7 @@ app.add_middleware(
 def _cors_headers(request: Request) -> dict:
     """Return CORS headers so error responses aren't blocked by the browser."""
     origin = request.headers.get("origin", "")
-    if "*" in origins or origin in origins:
+    if "*" in origins or origin in origins or (origin and re.match(r"https?://(localhost|127\.0\.0\.1)(:\d+)?", origin)):
         return {
             "Access-Control-Allow-Origin": origin or "*",
             "Access-Control-Allow-Credentials": "true",

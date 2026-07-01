@@ -44,11 +44,18 @@ class SitemapParser:
 
         discovered_sitemaps = {}  # sitemap_url -> {urls: [...], is_index: bool, parent: str/None}
         
+        import asyncio
+        tasks = []
         for sitemap_url in candidate_urls:
-            try:
-                await self._parse_sitemap_recursive(sitemap_url, discovered_sitemaps, depth=1, on_sitemap_parsed=on_sitemap_parsed)
-            except Exception as e:
-                logger.error(f"Failed to parse candidate sitemap {sitemap_url}: {e}")
+            tasks.append(
+                self._parse_sitemap_recursive(
+                    sitemap_url, 
+                    discovered_sitemaps, 
+                    depth=1, 
+                    on_sitemap_parsed=on_sitemap_parsed
+                )
+            )
+        await asyncio.gather(*tasks, return_exceptions=True)
 
         return discovered_sitemaps
 
