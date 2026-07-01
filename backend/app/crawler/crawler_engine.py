@@ -460,7 +460,7 @@ class CrawlerEngine:
             response = await client.get(url_obj.url, timeout=self.job.timeout_seconds)
             response_time_ms = int((time.time() - start_time) * 1000)
 
-            # Update URL details
+            # Update URL details (first phase commit)
             async with self.db_lock:
                 url_obj.status_code = response.status_code
                 url_obj.final_url = str(response.url)
@@ -483,33 +483,36 @@ class CrawlerEngine:
                 if response.history:
                     redirects = [str(r.url) for r in response.history]
                 url_obj.redirect_chain = redirects
+                await self.db.commit()
 
-                # Extract SEO data if HTML
-                if "text/html" in url_obj.content_type:
-                    html_content = response.text
-                    seo_data, soup = SEOExtractor.extract_all(html_content, url_obj.url, self.domain.domain, response_time_ms)
-                    
+            # Extract SEO data outside the lock
+            seo_data = None
+            issues = []
+            if "text/html" in url_obj.content_type:
+                html_content = response.text
+                seo_data, soup = SEOExtractor.extract_all(html_content, url_obj.url, self.domain.domain, response_time_ms)
+                issues = self.issue_detector.detect_issues(seo_data)
+
+            # Log issues outside the lock to prevent deadlock
+            for issue in issues:
+                await self.log_event(
+                    level=issue['type'],
+                    message=f"{issue['category']} Issue ({issue['issue']}) on {url_obj.url}: {issue['details']}",
+                    event_type="seo_issue_detected",
+                    entity_type="url",
+                    entity_id=str(url_obj.id),
+                    details=issue
+                )
+
+            # Finalize URL check (second phase commit)
+            async with self.db_lock:
+                if seo_data:
                     # Check indexability
                     robots = seo_data.get('robots', '').lower()
                     url_obj.is_indexable = 'noindex' not in robots
                     url_obj.canonical_url = seo_data.get('canonical_url')
                     url_obj.robots_meta = seo_data.get('robots')
-
-                    # Store all extracted SEO data in the JSON metadata field
                     url_obj.meta_data = seo_data
-
-                    # Detect issues for this URL
-                    issues = self.issue_detector.detect_issues(seo_data)
-                    for issue in issues:
-                        # Log issue
-                        await self.log_event(
-                            level=issue['type'],
-                            message=f"{issue['category']} Issue ({issue['issue']}) on {url_obj.url}: {issue['details']}",
-                            event_type="seo_issue_detected",
-                            entity_type="url",
-                            entity_id=str(url_obj.id),
-                            details=issue
-                        )
 
                 url_obj.crawl_status = URLCrawlStatus.CHECKED.value
                 url_obj.last_checked_at = datetime.utcnow()
