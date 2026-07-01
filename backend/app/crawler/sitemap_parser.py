@@ -15,7 +15,7 @@ class SitemapParser:
         self.base_domain = base_domain
         self.timeout = timeout
 
-    async def discover_sitemaps(self, base_url: str):
+    async def discover_sitemaps(self, base_url: str, on_sitemap_parsed=None):
         """
         Discover and parse sitemap.xml files.
         Returns:
@@ -46,7 +46,7 @@ class SitemapParser:
         
         for sitemap_url in candidate_urls:
             try:
-                await self._parse_sitemap_recursive(sitemap_url, discovered_sitemaps, depth=1)
+                await self._parse_sitemap_recursive(sitemap_url, discovered_sitemaps, depth=1, on_sitemap_parsed=on_sitemap_parsed)
             except Exception as e:
                 logger.error(f"Failed to parse candidate sitemap {sitemap_url}: {e}")
 
@@ -72,7 +72,7 @@ class SitemapParser:
 
         return sitemaps
 
-    async def _parse_sitemap_recursive(self, sitemap_url: str, discovered_sitemaps: dict, depth: int = 1, max_depth: int = 10, parent_url: str = None):
+    async def _parse_sitemap_recursive(self, sitemap_url: str, discovered_sitemaps: dict, depth: int = 1, max_depth: int = 10, parent_url: str = None, on_sitemap_parsed=None):
         """
         Parse a sitemap.xml file recursively (handling sitemap indexes).
         Updates discovered_sitemaps dict in place.
@@ -86,6 +86,16 @@ class SitemapParser:
 
             if response.status_code != 200:
                 logger.warning(f"Sitemap {sitemap_url} returned status code {response.status_code}")
+                discovered_sitemaps[sitemap_url] = {
+                    'urls': [],
+                    'is_index': False,
+                    'parent_sitemap_url': parent_url,
+                    'response_code': response.status_code,
+                    'status': 'failed',
+                    'error_message': f"Returned status code {response.status_code}"
+                }
+                if on_sitemap_parsed:
+                    await on_sitemap_parsed(sitemap_url, discovered_sitemaps[sitemap_url])
                 return
 
             # Handle compressed sitemaps
@@ -101,6 +111,16 @@ class SitemapParser:
                 root = ET.fromstring(content)
             except ET.ParseError as e:
                 logger.error(f"XML parse error for {sitemap_url}: {e}")
+                discovered_sitemaps[sitemap_url] = {
+                    'urls': [],
+                    'is_index': False,
+                    'parent_sitemap_url': parent_url,
+                    'response_code': response.status_code,
+                    'status': 'failed',
+                    'error_message': f"XML parse error: {str(e)}"
+                }
+                if on_sitemap_parsed:
+                    await on_sitemap_parsed(sitemap_url, discovered_sitemaps[sitemap_url])
                 return
 
             # Remove namespace prefixes (e.g. {http://www.sitemaps.org/schemas/sitemap/0.9})
@@ -121,6 +141,8 @@ class SitemapParser:
             }
 
             if is_index:
+                if on_sitemap_parsed:
+                    await on_sitemap_parsed(sitemap_url, discovered_sitemaps[sitemap_url])
                 logger.info(f"Found sitemap index with {len(nested_sitemap_elems)} nested sitemaps in {sitemap_url}")
                 for sitemap_elem in nested_sitemap_elems:
                     loc_elem = sitemap_elem.find('loc')
@@ -131,7 +153,8 @@ class SitemapParser:
                             discovered_sitemaps, 
                             depth + 1, 
                             max_depth, 
-                            parent_url=sitemap_url
+                            parent_url=sitemap_url,
+                            on_sitemap_parsed=on_sitemap_parsed
                         )
             else:
                 # Extract URLs from sitemap
@@ -152,6 +175,8 @@ class SitemapParser:
                             'changefreq': changefreq_elem.text.strip() if changefreq_elem is not None and changefreq_elem.text else None,
                             'priority': float(priority_elem.text.strip()) if priority_elem is not None and priority_elem.text else None
                         })
+                if on_sitemap_parsed:
+                    await on_sitemap_parsed(sitemap_url, discovered_sitemaps[sitemap_url])
 
         except Exception as e:
             logger.error(f"Error parsing sitemap {sitemap_url}: {e}")
@@ -163,3 +188,5 @@ class SitemapParser:
                 'status': 'failed',
                 'error_message': str(e)
             }
+            if on_sitemap_parsed:
+                await on_sitemap_parsed(sitemap_url, discovered_sitemaps[sitemap_url])

@@ -70,6 +70,7 @@ interface CrawledUrl {
   content_type: string | null;
   canonical_url: string | null;
   is_indexable: boolean | null;
+  crawl_status?: string;
   metadata: any;
 }
 
@@ -716,13 +717,23 @@ export default function Dashboard() {
                                 {u.url}
                               </td>
                               <td className="px-6 py-3.5">
-                                <span className={`px-2 py-0.5 rounded font-mono ${
-                                  u.status_code && u.status_code < 300 ? "bg-emerald-500/10 text-emerald-400" :
-                                  u.status_code && u.status_code < 400 ? "bg-blue-500/10 text-blue-400" :
-                                  "bg-red-500/10 text-red-400"
-                                }`}>
-                                  {u.status_code || "Fail"}
-                                </span>
+                                {u.crawl_status === "pending" ? (
+                                  <span className="px-2 py-0.5 rounded font-mono bg-slate-800 text-slate-400 border border-slate-700/50">
+                                    Pending
+                                  </span>
+                                ) : u.crawl_status === "checking" ? (
+                                  <span className="px-2 py-0.5 rounded font-mono bg-blue-500/10 text-blue-400 border border-blue-500/20 animate-pulse">
+                                    Checking...
+                                  </span>
+                                ) : (
+                                  <span className={`px-2 py-0.5 rounded font-mono ${
+                                    u.status_code && u.status_code < 300 ? "bg-emerald-500/10 text-emerald-400" :
+                                    u.status_code && u.status_code < 400 ? "bg-blue-500/10 text-blue-400" :
+                                    "bg-red-500/10 text-red-400"
+                                  }`}>
+                                    {u.status_code || (u.crawl_status === "failed" ? "Fail" : "Pending")}
+                                  </span>
+                                )}
                               </td>
                               <td className="px-6 py-3.5 font-mono text-slate-400">
                                 {u.response_time_ms ? `${u.response_time_ms}ms` : "-"}

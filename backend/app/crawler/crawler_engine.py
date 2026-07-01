@@ -228,48 +228,29 @@ class CrawlerEngine:
         await self.db.commit()
         await self.log_event("info", "Starting Sitemap Discovery stage", event_type="stage_sitemap_discovery_started")
 
-        # Discover sitemaps
-        sitemaps_data = await self.sitemap_parser.discover_sitemaps(self.domain.original_url)
-
-        # Log results
-        total_discovered = len(sitemaps_data)
-        self.job.total_sitemaps_found = total_discovered
-        self.domain.total_sitemaps = total_discovered
-        await self.db.commit()
-        await self.log_event("info", f"Discovered {total_discovered} sitemaps", event_type="sitemaps_discovered", details={"sitemaps_count": total_discovered})
-
-        # Insert Sitemaps and URLs
+        # Insert Sitemaps and URLs stage flags
         self.job.stage_parsing_indexes = True
         self.job.stage_parsing_sitemaps = True
         self.job.stage_url_discovery = True
         await self.db.commit()
 
-        # Check if sitemaps found. If empty, create a default sitemap so we can still crawl the root page
-        if not sitemaps_data:
-            await self.log_event("info", "No sitemaps found. Creating a default fallback sitemap", event_type="sitemap_fallback")
-            fallback_sitemap_url = f"{self.domain.original_url.rstrip('/')}/sitemap_fallback.xml"
-            sitemaps_data[fallback_sitemap_url] = {
-                'urls': [{'url': self.domain.original_url, 'lastmod': None, 'changefreq': None, 'priority': 1.0}],
-                'is_index': False,
-                'parent_sitemap_url': None,
-                'response_code': 200,
-                'status': 'generated'
-            }
-
         # Keep track of created subdomains (by normalized domain / netloc)
         subdomains_cache = {}
+        sitemap_mapping = {}  # sitemap_url -> Sitemap id
+        added_urls = set()
+        total_urls = 0
+        total_sitemaps = 0
 
-        # 1. Create Sitemap records
-        sitemap_mapping = {}  # sitemap_url -> Sitemap object
-        for sitemap_url, sdata in sitemaps_data.items():
-            # Get or create Subdomain
+        async def handle_sitemap_parsed(sitemap_url: str, sdata: dict):
+            nonlocal total_urls, total_sitemaps
+            
+            # 1. Get or create Subdomain
             parsed_sitemap_url = urlparse(sitemap_url)
             sitemap_subdomain = parsed_sitemap_url.netloc
             sub_id = None
             
             if sitemap_subdomain != self.domain.domain:
                 if sitemap_subdomain not in subdomains_cache:
-                    # Insert subdomain
                     sub = Subdomain(
                         domain_id=self.domain.id,
                         subdomain=sitemap_subdomain,
@@ -281,13 +262,20 @@ class CrawlerEngine:
                     self.domain.total_subdomains += 1
                 sub_id = subdomains_cache[sitemap_subdomain]
 
-            # Parse timestamp parameters
+            # 2. Check if this sitemap record is already created
+            if sitemap_url in sitemap_mapping:
+                return
+
+            parent_url = sdata.get('parent_sitemap_url')
+            parent_sitemap_id = sitemap_mapping.get(parent_url) if parent_url else None
+
             smap = Sitemap(
                 domain_id=self.domain.id,
                 subdomain_id=sub_id,
                 sitemap_url=sitemap_url,
                 is_index=sdata.get('is_index', False),
-                discovered_from=SitemapDiscoverySource.ROBOTS_TXT.value if sdata.get('parent_sitemap_url') is None else SitemapDiscoverySource.RECURSIVE_DISCOVERY.value,
+                parent_sitemap_id=parent_sitemap_id,
+                discovered_from=SitemapDiscoverySource.ROBOTS_TXT.value if parent_url is None else SitemapDiscoverySource.RECURSIVE_DISCOVERY.value,
                 status=sdata.get('status', 'pending'),
                 url_count=len(sdata.get('urls', [])),
                 response_code=sdata.get('response_code'),
@@ -295,24 +283,13 @@ class CrawlerEngine:
                 parsed_at=datetime.utcnow()
             )
             self.db.add(smap)
-            sitemap_mapping[sitemap_url] = smap
+            await self.db.flush() # assign ID
+            sitemap_mapping[sitemap_url] = smap.id
+            total_sitemaps += 1
+            self.job.total_sitemaps_found = total_sitemaps
+            self.domain.total_sitemaps = total_sitemaps
 
-        await self.db.flush() # Get IDs for all sitemaps
-
-        # 2. Map parent_sitemap_id relationships
-        for sitemap_url, sdata in sitemaps_data.items():
-            parent_url = sdata.get('parent_sitemap_url')
-            if parent_url and parent_url in sitemap_mapping:
-                sitemap_mapping[sitemap_url].parent_sitemap_id = sitemap_mapping[parent_url].id
-        
-        await self.db.commit()
-
-        # 3. Add URLs to crawl queue
-        total_urls = 0
-        added_urls = set() # de-duplicate urls in local memory first
-
-        for sitemap_url, sdata in sitemaps_data.items():
-            smap = sitemap_mapping[sitemap_url]
+            # 3. Add URLs for this sitemap to the database
             for url_entry in sdata.get('urls', []):
                 url_str = url_entry['url']
                 url_clean_hash = get_url_hash(url_str)
@@ -324,7 +301,7 @@ class CrawlerEngine:
                 # Get Subdomain for URL
                 parsed_url = urlparse(url_str)
                 url_subdomain = parsed_url.netloc
-                sub_id = None
+                url_sub_id = None
                 if url_subdomain != self.domain.domain:
                     if url_subdomain not in subdomains_cache:
                         sub = Subdomain(
@@ -336,21 +313,20 @@ class CrawlerEngine:
                         await self.db.flush()
                         subdomains_cache[url_subdomain] = sub.id
                         self.domain.total_subdomains += 1
-                    sub_id = subdomains_cache[url_subdomain]
+                    url_sub_id = subdomains_cache[url_subdomain]
 
                 # Parse Priority & Dates
                 priority = url_entry.get('priority')
                 lastmod_date = None
                 if url_entry.get('lastmod'):
                     try:
-                        # Extract date portion only e.g. "2026-07-01"
                         lastmod_date = datetime.strptime(url_entry['lastmod'][:10], '%Y-%m-%d').date()
                     except:
                         pass
 
                 url_obj = URL(
                     domain_id=self.domain.id,
-                    subdomain_id=sub_id,
+                    subdomain_id=url_sub_id,
                     sitemap_id=smap.id,
                     url=url_str,
                     url_hash=url_clean_hash,
@@ -362,9 +338,29 @@ class CrawlerEngine:
                 self.db.add(url_obj)
                 total_urls += 1
 
-        self.job.total_urls_found = total_urls
-        self.domain.total_urls = total_urls
-        await self.db.commit()
+            self.job.total_urls_found = total_urls
+            self.domain.total_urls = total_urls
+            await self.db.commit()
+            
+            logger.info(f"Discovered sitemap {sitemap_url}: {len(sdata.get('urls', []))} URLs (total URLs found: {total_urls})")
+
+        # Discover sitemaps (using callback)
+        await self.sitemap_parser.discover_sitemaps(self.domain.original_url, on_sitemap_parsed=handle_sitemap_parsed)
+
+        # Check if any sitemaps were found/mapped. If not, trigger fallback
+        if not sitemap_mapping:
+            await self.log_event("info", "No sitemaps found. Creating a default fallback sitemap", event_type="sitemap_fallback")
+            fallback_sitemap_url = f"{self.domain.original_url.rstrip('/')}/sitemap_fallback.xml"
+            fallback_data = {
+                'urls': [{'url': self.domain.original_url, 'lastmod': None, 'changefreq': None, 'priority': 1.0}],
+                'is_index': False,
+                'parent_sitemap_url': None,
+                'response_code': 200,
+                'status': 'generated'
+            }
+            await handle_sitemap_parsed(fallback_sitemap_url, fallback_data)
+
+        await self.log_event("info", f"Discovered {total_sitemaps} sitemaps and {total_urls} URLs", event_type="sitemaps_discovered", details={"sitemaps_count": total_sitemaps, "urls_count": total_urls})
         await self.log_event("info", f"Queued {total_urls} URLs for HTTP checking", event_type="urls_queued", details={"urls_count": total_urls})
 
     async def _stage_http_checking(self, client: httpx.AsyncClient):

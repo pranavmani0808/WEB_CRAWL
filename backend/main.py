@@ -271,6 +271,7 @@ async def list_job_urls(job_id: str, db: AsyncSession = Depends(get_db)):
         "content_type": u.content_type,
         "canonical_url": u.canonical_url,
         "is_indexable": u.is_indexable,
+        "crawl_status": u.crawl_status,
         "metadata": u.meta_data
     } for u in urls]
 
