@@ -423,14 +423,17 @@ class CrawlerEngine:
 
     async def _stage_http_checking(self, client: httpx.AsyncClient):
         """Asynchronously crawl URLs dynamically using a polling queue with concurrency limit"""
-        self.job.stage_http_checking = True
-        await self.db.commit()
+        async with self.db_lock:
+            self.job.stage_http_checking = True
+            await self.db.commit()
+
         await self.log_event("info", "Starting HTTP Checking stage", event_type="stage_http_checking_started")
 
         # Get initial list of pending URLs
-        stmt = select(URL).where(URL.domain_id == self.domain.id, URL.crawl_status == URLCrawlStatus.PENDING.value)
-        result = await self.db.execute(stmt)
-        urls = list(result.scalars().all())
+        async with self.db_lock:
+            stmt = select(URL).where(URL.domain_id == self.domain.id, URL.crawl_status == URLCrawlStatus.PENDING.value)
+            result = await self.db.execute(stmt)
+            urls = list(result.scalars().all())
 
         if not urls:
             await self.log_event("warning", "No pending URLs found for crawling.", event_type="no_urls_found")
@@ -460,9 +463,10 @@ class CrawlerEngine:
             await asyncio.sleep(0.1)
 
             # Query database for new pending URLs
-            stmt = select(URL).where(URL.domain_id == self.domain.id, URL.crawl_status == URLCrawlStatus.PENDING.value)
-            result = await self.db.execute(stmt)
-            pending_urls = list(result.scalars().all())
+            async with self.db_lock:
+                stmt = select(URL).where(URL.domain_id == self.domain.id, URL.crawl_status == URLCrawlStatus.PENDING.value)
+                result = await self.db.execute(stmt)
+                pending_urls = list(result.scalars().all())
 
             # Filter out URLs already in queue or processing
             new_urls = [u for u in pending_urls if u.url not in active_urls]
