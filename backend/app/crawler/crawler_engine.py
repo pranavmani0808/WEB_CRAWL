@@ -247,145 +247,145 @@ class CrawlerEngine:
             nonlocal total_urls, total_sitemaps
             async with self.db_lock:
                 # 1. Get or create Subdomain
-            parsed_sitemap_url = urlparse(sitemap_url)
-            sitemap_subdomain = parsed_sitemap_url.netloc
-            sub_id = None
-            
-            if sitemap_subdomain != self.domain.domain:
-                if sitemap_subdomain not in subdomains_cache:
-                    stmt = select(Subdomain).where(Subdomain.domain_id == self.domain.id, Subdomain.subdomain == sitemap_subdomain)
-                    res = await self.db.execute(stmt)
-                    sub = res.scalar_one_or_none()
-                    if not sub:
-                        sub = Subdomain(
-                            domain_id=self.domain.id,
-                            subdomain=sitemap_subdomain,
-                            normalized_url=f"{parsed_sitemap_url.scheme}://{parsed_sitemap_url.netloc}"
-                        )
-                        self.db.add(sub)
-                        await self.db.flush() # assign ID
-                        self.domain.total_subdomains += 1
-                    subdomains_cache[sitemap_subdomain] = sub.id
-                sub_id = subdomains_cache[sitemap_subdomain]
-
-            # 2. Check if this sitemap record is already created
-            if sitemap_url in sitemap_mapping:
-                return
-
-            parent_url = sdata.get('parent_sitemap_url')
-            parent_sitemap_id = sitemap_mapping.get(parent_url) if parent_url else None
-
-            stmt = select(Sitemap).where(Sitemap.domain_id == self.domain.id, Sitemap.sitemap_url == sitemap_url)
-            res = await self.db.execute(stmt)
-            smap = res.scalar_one_or_none()
-
-            if not smap:
-                smap = Sitemap(
-                    domain_id=self.domain.id,
-                    subdomain_id=sub_id,
-                    sitemap_url=sitemap_url,
-                    is_index=sdata.get('is_index', False),
-                    parent_sitemap_id=parent_sitemap_id,
-                    discovered_from=SitemapDiscoverySource.ROBOTS_TXT.value if parent_url is None else SitemapDiscoverySource.RECURSIVE_DISCOVERY.value,
-                    status=sdata.get('status', 'pending'),
-                    url_count=len(sdata.get('urls', [])),
-                    response_code=sdata.get('response_code'),
-                    fetched_at=datetime.utcnow(),
-                    parsed_at=datetime.utcnow()
-                )
-                self.db.add(smap)
-                await self.db.flush() # assign ID
-            else:
-                smap.subdomain_id = sub_id
-                smap.is_index = sdata.get('is_index', False)
-                smap.parent_sitemap_id = parent_sitemap_id
-                smap.status = sdata.get('status', 'pending')
-                smap.url_count = len(sdata.get('urls', []))
-                smap.response_code = sdata.get('response_code')
-                smap.fetched_at = datetime.utcnow()
-                smap.parsed_at = datetime.utcnow()
-
-            sitemap_mapping[sitemap_url] = smap.id
-            total_sitemaps += 1
-            self.job.total_sitemaps_found = total_sitemaps
-            self.domain.total_sitemaps = total_sitemaps
-
-            # 3. Add URLs for this sitemap to the database
-            for url_entry in sdata.get('urls', []):
-                url_str = url_entry['url']
-                url_clean_hash = get_url_hash(url_str)
+                parsed_sitemap_url = urlparse(sitemap_url)
+                sitemap_subdomain = parsed_sitemap_url.netloc
+                sub_id = None
                 
-                if url_clean_hash in added_urls:
-                    continue
-                added_urls.add(url_clean_hash)
-
-                # Get Subdomain for URL
-                parsed_url = urlparse(url_str)
-                url_subdomain = parsed_url.netloc
-                url_sub_id = None
-                if url_subdomain != self.domain.domain:
-                    if url_subdomain not in subdomains_cache:
-                        stmt = select(Subdomain).where(Subdomain.domain_id == self.domain.id, Subdomain.subdomain == url_subdomain)
+                if sitemap_subdomain != self.domain.domain:
+                    if sitemap_subdomain not in subdomains_cache:
+                        stmt = select(Subdomain).where(Subdomain.domain_id == self.domain.id, Subdomain.subdomain == sitemap_subdomain)
                         res = await self.db.execute(stmt)
                         sub = res.scalar_one_or_none()
                         if not sub:
                             sub = Subdomain(
                                 domain_id=self.domain.id,
-                                subdomain=url_subdomain,
-                                normalized_url=f"{parsed_url.scheme}://{parsed_url.netloc}"
+                                subdomain=sitemap_subdomain,
+                                normalized_url=f"{parsed_sitemap_url.scheme}://{parsed_sitemap_url.netloc}"
                             )
                             self.db.add(sub)
-                            await self.db.flush()
+                            await self.db.flush() # assign ID
                             self.domain.total_subdomains += 1
-                        subdomains_cache[url_subdomain] = sub.id
-                    url_sub_id = subdomains_cache[url_subdomain]
+                        subdomains_cache[sitemap_subdomain] = sub.id
+                    sub_id = subdomains_cache[sitemap_subdomain]
 
-                # Parse Priority & Dates
-                priority = url_entry.get('priority')
-                lastmod_date = None
-                if url_entry.get('lastmod'):
-                    try:
-                        lastmod_date = datetime.strptime(url_entry['lastmod'][:10], '%Y-%m-%d').date()
-                    except:
-                        pass
+                # 2. Check if this sitemap record is already created
+                if sitemap_url in sitemap_mapping:
+                    return
 
-                stmt = select(URL).where(URL.domain_id == self.domain.id, URL.url_hash == url_clean_hash)
+                parent_url = sdata.get('parent_sitemap_url')
+                parent_sitemap_id = sitemap_mapping.get(parent_url) if parent_url else None
+
+                stmt = select(Sitemap).where(Sitemap.domain_id == self.domain.id, Sitemap.sitemap_url == sitemap_url)
                 res = await self.db.execute(stmt)
-                url_obj = res.scalar_one_or_none()
+                smap = res.scalar_one_or_none()
 
-                if not url_obj:
-                    url_obj = URL(
+                if not smap:
+                    smap = Sitemap(
                         domain_id=self.domain.id,
-                        subdomain_id=url_sub_id,
-                        sitemap_id=smap.id,
-                        url=url_str,
-                        url_hash=url_clean_hash,
-                        sitemap_last_modified=lastmod_date,
-                        sitemap_change_frequency=url_entry.get('changefreq'),
-                        sitemap_priority=priority,
-                        crawl_status=URLCrawlStatus.PENDING.value
+                        subdomain_id=sub_id,
+                        sitemap_url=sitemap_url,
+                        is_index=sdata.get('is_index', False),
+                        parent_sitemap_id=parent_sitemap_id,
+                        discovered_from=SitemapDiscoverySource.ROBOTS_TXT.value if parent_url is None else SitemapDiscoverySource.RECURSIVE_DISCOVERY.value,
+                        status=sdata.get('status', 'pending'),
+                        url_count=len(sdata.get('urls', [])),
+                        response_code=sdata.get('response_code'),
+                        fetched_at=datetime.utcnow(),
+                        parsed_at=datetime.utcnow()
                     )
-                    self.db.add(url_obj)
+                    self.db.add(smap)
+                    await self.db.flush() # assign ID
                 else:
-                    url_obj.subdomain_id = url_sub_id
-                    url_obj.sitemap_id = smap.id
-                    url_obj.sitemap_last_modified = lastmod_date
-                    url_obj.sitemap_change_frequency = url_entry.get('changefreq')
-                    url_obj.sitemap_priority = priority
-                    url_obj.crawl_status = URLCrawlStatus.PENDING.value
-                    url_obj.status_code = None
-                    url_obj.status_category = None
-                    url_obj.response_time_ms = None
-                    url_obj.content_type = None
-                    url_obj.content_length = None
-                    url_obj.canonical_url = None
-                    url_obj.robots_meta = None
-                    url_obj.is_indexable = None
-                    url_obj.meta_data = {}
-                    url_obj.error_details = None
-                    url_obj.crawl_attempt = 0
+                    smap.subdomain_id = sub_id
+                    smap.is_index = sdata.get('is_index', False)
+                    smap.parent_sitemap_id = parent_sitemap_id
+                    smap.status = sdata.get('status', 'pending')
+                    smap.url_count = len(sdata.get('urls', []))
+                    smap.response_code = sdata.get('response_code')
+                    smap.fetched_at = datetime.utcnow()
+                    smap.parsed_at = datetime.utcnow()
 
-                total_urls += 1
+                sitemap_mapping[sitemap_url] = smap.id
+                total_sitemaps += 1
+                self.job.total_sitemaps_found = total_sitemaps
+                self.domain.total_sitemaps = total_sitemaps
+
+                # 3. Add URLs for this sitemap to the database
+                for url_entry in sdata.get('urls', []):
+                    url_str = url_entry['url']
+                    url_clean_hash = get_url_hash(url_str)
+                    
+                    if url_clean_hash in added_urls:
+                        continue
+                    added_urls.add(url_clean_hash)
+
+                    # Get Subdomain for URL
+                    parsed_url = urlparse(url_str)
+                    url_subdomain = parsed_url.netloc
+                    url_sub_id = None
+                    if url_subdomain != self.domain.domain:
+                        if url_subdomain not in subdomains_cache:
+                            stmt = select(Subdomain).where(Subdomain.domain_id == self.domain.id, Subdomain.subdomain == url_subdomain)
+                            res = await self.db.execute(stmt)
+                            sub = res.scalar_one_or_none()
+                            if not sub:
+                                sub = Subdomain(
+                                    domain_id=self.domain.id,
+                                    subdomain=url_subdomain,
+                                    normalized_url=f"{parsed_url.scheme}://{parsed_url.netloc}"
+                                )
+                                self.db.add(sub)
+                                await self.db.flush()
+                                self.domain.total_subdomains += 1
+                            subdomains_cache[url_subdomain] = sub.id
+                        url_sub_id = subdomains_cache[url_subdomain]
+
+                    # Parse Priority & Dates
+                    priority = url_entry.get('priority')
+                    lastmod_date = None
+                    if url_entry.get('lastmod'):
+                        try:
+                            lastmod_date = datetime.strptime(url_entry['lastmod'][:10], '%Y-%m-%d').date()
+                        except:
+                            pass
+
+                    stmt = select(URL).where(URL.domain_id == self.domain.id, URL.url_hash == url_clean_hash)
+                    res = await self.db.execute(stmt)
+                    url_obj = res.scalar_one_or_none()
+
+                    if not url_obj:
+                        url_obj = URL(
+                            domain_id=self.domain.id,
+                            subdomain_id=url_sub_id,
+                            sitemap_id=smap.id,
+                            url=url_str,
+                            url_hash=url_clean_hash,
+                            sitemap_last_modified=lastmod_date,
+                            sitemap_change_frequency=url_entry.get('changefreq'),
+                            sitemap_priority=priority,
+                            crawl_status=URLCrawlStatus.PENDING.value
+                        )
+                        self.db.add(url_obj)
+                    else:
+                        url_obj.subdomain_id = url_sub_id
+                        url_obj.sitemap_id = smap.id
+                        url_obj.sitemap_last_modified = lastmod_date
+                        url_obj.sitemap_change_frequency = url_entry.get('changefreq')
+                        url_obj.sitemap_priority = priority
+                        url_obj.crawl_status = URLCrawlStatus.PENDING.value
+                        url_obj.status_code = None
+                        url_obj.status_category = None
+                        url_obj.response_time_ms = None
+                        url_obj.content_type = None
+                        url_obj.content_length = None
+                        url_obj.canonical_url = None
+                        url_obj.robots_meta = None
+                        url_obj.is_indexable = None
+                        url_obj.meta_data = {}
+                        url_obj.error_details = None
+                        url_obj.crawl_attempt = 0
+
+                    total_urls += 1
 
                 self.job.total_urls_found = total_urls
                 self.domain.total_urls = total_urls
