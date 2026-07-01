@@ -95,6 +95,15 @@ class CrawlerEngine:
 
                 self.domain = self.job.domain
                 
+                # Reset stuck URLs from previous interrupted runs
+                from sqlalchemy import update
+                reset_stmt = (
+                    update(URL)
+                    .where(URL.domain_id == self.domain.id, URL.crawl_status == URLCrawlStatus.CHECKING.value)
+                    .values(crawl_status=URLCrawlStatus.PENDING.value)
+                )
+                await self.db.execute(reset_stmt)
+
                 # Update status
                 self.job.status = CrawlJobStatus.RUNNING.value
                 self.job.started_at = datetime.utcnow()
