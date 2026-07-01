@@ -1,3 +1,4 @@
+import logging
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -8,11 +9,14 @@ from app.models.domain import Domain
 from app.models.crawl_job import CrawlJob
 from app.models.url import URL
 from app.models.crawl_log import CrawlLog
+from app.models.crawl_statistics import CrawlStatistics
 from app.models.user import User
 from app.workers.tasks import crawl_domain_task
 import uuid
 from urllib.parse import urlparse
 from pydantic import BaseModel
+
+logger = logging.getLogger("uvicorn.error")
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -81,7 +85,7 @@ async def crawler_exception_handler(request: Request, exc: CrawlerException):
 
 @app.exception_handler(Exception)
 async def generic_exception_handler(request: Request, exc: Exception):
-    # Log the exception here in production
+    logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         headers=_cors_headers(request),
@@ -168,11 +172,16 @@ async def start_crawl_endpoint(req: CrawlRequest):
 @app.get("/api/crawl/jobs", tags=["Crawl"])
 async def list_crawl_jobs():
     """List all crawl jobs with associated domains"""
-    jobs = await CrawlJob.find().sort("created_at", -1).to_list(None)
+    jobs = await CrawlJob.find().sort("-created_at").to_list(None)
+
+    # Batch fetch domains to avoid N+1 query overhead
+    domain_ids = list({j.domain_id for j in jobs})
+    domains = await Domain.find({"_id": {"$in": domain_ids}}).to_list(None)
+    domains_map = {d.id: d for d in domains}
 
     result = []
     for j in jobs:
-        domain = await Domain.get(j.domain_id)
+        domain = domains_map.get(j.domain_id)
         result.append({
             "id": str(j.id),
             "status": j.status,
@@ -202,7 +211,7 @@ async def get_crawl_job(job_id: str):
     domain = await Domain.get(job.domain_id)
 
     # Fetch logs
-    logs = await CrawlLog.find(CrawlLog.crawl_job_id == job_uuid).sort("timestamp", 1).to_list(None)
+    logs = await CrawlLog.find(CrawlLog.crawl_job_id == job_uuid).sort("timestamp").to_list(None)
 
     # Fetch statistics
     stats = await CrawlStatistics.find_one(CrawlStatistics.crawl_job_id == job_uuid)
@@ -261,7 +270,7 @@ async def list_job_urls(job_id: str):
         return JSONResponse(status_code=404, content={"message": "Job not found"})
 
     # Fetch URLs for this domain
-    urls = await URL.find(URL.domain_id == job.domain_id).sort("url", 1).to_list(None)
+    urls = await URL.find(URL.domain_id == job.domain_id).sort("url").to_list(None)
 
     return [{
         "id": str(u.id),
