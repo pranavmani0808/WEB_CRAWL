@@ -50,6 +50,7 @@ class CrawlerEngine:
         self.sitemap_parser = None
         self.rate_limiter = None
         self.issue_detector = None
+        self.db_lock = asyncio.Lock()
 
     async def log_event(self, level: str, message: str, event_type: str = None, entity_type: str = None, entity_id: str = None, details: dict = None):
         """Log event to python logger and database `crawl_logs` table"""
@@ -62,20 +63,21 @@ class CrawlerEngine:
             logger.info(log_msg)
 
         if self.db:
-            try:
-                log_entry = CrawlLog(
-                    crawl_job_id=self.crawl_job_id,
-                    level=level,
-                    message=message,
-                    event_type=event_type,
-                    entity_type=entity_type,
-                    entity_id=entity_id,
-                    details=details or {}
-                )
-                self.db.add(log_entry)
-                await self.db.commit()
-            except Exception as e:
-                logger.error(f"Failed to write log to DB: {e}")
+            async with self.db_lock:
+                try:
+                    log_entry = CrawlLog(
+                        crawl_job_id=self.crawl_job_id,
+                        level=level,
+                        message=message,
+                        event_type=event_type,
+                        entity_type=entity_type,
+                        entity_id=entity_id,
+                        details=details or {}
+                    )
+                    self.db.add(log_entry)
+                    await self.db.commit()
+                except Exception as e:
+                    logger.error(f"Failed to write log to DB: {e}")
 
     async def execute(self):
         """Execute the crawl pipeline"""
@@ -243,8 +245,8 @@ class CrawlerEngine:
 
         async def handle_sitemap_parsed(sitemap_url: str, sdata: dict):
             nonlocal total_urls, total_sitemaps
-            
-            # 1. Get or create Subdomain
+            async with self.db_lock:
+                # 1. Get or create Subdomain
             parsed_sitemap_url = urlparse(sitemap_url)
             sitemap_subdomain = parsed_sitemap_url.netloc
             sub_id = None
@@ -385,11 +387,11 @@ class CrawlerEngine:
 
                 total_urls += 1
 
-            self.job.total_urls_found = total_urls
-            self.domain.total_urls = total_urls
-            await self.db.commit()
-            
-            logger.info(f"Discovered sitemap {sitemap_url}: {len(sdata.get('urls', []))} URLs (total URLs found: {total_urls})")
+                self.job.total_urls_found = total_urls
+                self.domain.total_urls = total_urls
+                await self.db.commit()
+                
+                logger.info(f"Discovered sitemap {sitemap_url}: {len(sdata.get('urls', []))} URLs (total URLs found: {total_urls})")
 
         # Discover sitemaps (using callback)
         await self.sitemap_parser.discover_sitemaps(self.domain.original_url, on_sitemap_parsed=handle_sitemap_parsed)
@@ -445,9 +447,10 @@ class CrawlerEngine:
 
     async def _crawl_single_url(self, client: httpx.AsyncClient, url_obj: URL):
         """Crawl a single URL and save result to database"""
-        url_obj.crawl_status = URLCrawlStatus.CHECKING.value
-        url_obj.crawl_attempt += 1
-        await self.db.commit()
+        async with self.db_lock:
+            url_obj.crawl_status = URLCrawlStatus.CHECKING.value
+            url_obj.crawl_attempt += 1
+            await self.db.commit()
 
         start_time = time.time()
         logger.info(f"Crawl HTTP request started: {url_obj.url}")
@@ -458,80 +461,84 @@ class CrawlerEngine:
             response_time_ms = int((time.time() - start_time) * 1000)
 
             # Update URL details
-            url_obj.status_code = response.status_code
-            url_obj.final_url = str(response.url)
-            url_obj.response_time_ms = response_time_ms
-            url_obj.content_type = response.headers.get("content-type", "").split(";")[0].strip()
-            url_obj.content_length = int(response.headers.get("content-length", 0))
+            async with self.db_lock:
+                url_obj.status_code = response.status_code
+                url_obj.final_url = str(response.url)
+                url_obj.response_time_ms = response_time_ms
+                url_obj.content_type = response.headers.get("content-type", "").split(";")[0].strip()
+                url_obj.content_length = int(response.headers.get("content-length", 0))
 
-            # Categorize status code
-            if 200 <= response.status_code < 300:
-                url_obj.status_category = URLStatusCategory.SUCCESS.value
-            elif 300 <= response.status_code < 400:
-                url_obj.status_category = URLStatusCategory.REDIRECT.value
-            elif 400 <= response.status_code < 500:
-                url_obj.status_category = URLStatusCategory.CLIENT_ERROR.value
-            elif response.status_code >= 500:
-                url_obj.status_category = URLStatusCategory.SERVER_ERROR.value
+                # Categorize status code
+                if 200 <= response.status_code < 300:
+                    url_obj.status_category = URLStatusCategory.SUCCESS.value
+                elif 300 <= response.status_code < 400:
+                    url_obj.status_category = URLStatusCategory.REDIRECT.value
+                elif 400 <= response.status_code < 500:
+                    url_obj.status_category = URLStatusCategory.CLIENT_ERROR.value
+                elif response.status_code >= 500:
+                    url_obj.status_category = URLStatusCategory.SERVER_ERROR.value
 
-            # Extract redirects
-            redirects = []
-            if response.history:
-                redirects = [str(r.url) for r in response.history]
-            url_obj.redirect_chain = redirects
+                # Extract redirects
+                redirects = []
+                if response.history:
+                    redirects = [str(r.url) for r in response.history]
+                url_obj.redirect_chain = redirects
 
-            # Extract SEO data if HTML
-            if "text/html" in url_obj.content_type:
-                html_content = response.text
-                seo_data, soup = SEOExtractor.extract_all(html_content, url_obj.url, self.domain.domain, response_time_ms)
-                
-                # Check indexability
-                robots = seo_data.get('robots', '').lower()
-                url_obj.is_indexable = 'noindex' not in robots
-                url_obj.canonical_url = seo_data.get('canonical_url')
-                url_obj.robots_meta = seo_data.get('robots')
+                # Extract SEO data if HTML
+                if "text/html" in url_obj.content_type:
+                    html_content = response.text
+                    seo_data, soup = SEOExtractor.extract_all(html_content, url_obj.url, self.domain.domain, response_time_ms)
+                    
+                    # Check indexability
+                    robots = seo_data.get('robots', '').lower()
+                    url_obj.is_indexable = 'noindex' not in robots
+                    url_obj.canonical_url = seo_data.get('canonical_url')
+                    url_obj.robots_meta = seo_data.get('robots')
 
-                # Store all extracted SEO data in the JSON metadata field
-                url_obj.meta_data = seo_data
+                    # Store all extracted SEO data in the JSON metadata field
+                    url_obj.meta_data = seo_data
 
-                # Detect issues for this URL
-                issues = self.issue_detector.detect_issues(seo_data)
-                for issue in issues:
-                    # Log issue
-                    await self.log_event(
-                        level=issue['type'],
-                        message=f"{issue['category']} Issue ({issue['issue']}) on {url_obj.url}: {issue['details']}",
-                        event_type="seo_issue_detected",
-                        entity_type="url",
-                        entity_id=str(url_obj.id),
-                        details=issue
-                    )
+                    # Detect issues for this URL
+                    issues = self.issue_detector.detect_issues(seo_data)
+                    for issue in issues:
+                        # Log issue
+                        await self.log_event(
+                            level=issue['type'],
+                            message=f"{issue['category']} Issue ({issue['issue']}) on {url_obj.url}: {issue['details']}",
+                            event_type="seo_issue_detected",
+                            entity_type="url",
+                            entity_id=str(url_obj.id),
+                            details=issue
+                        )
 
-            url_obj.crawl_status = URLCrawlStatus.CHECKED.value
-            url_obj.last_checked_at = datetime.utcnow()
-            self.job.total_urls_checked += 1
-            self.domain.crawled_urls += 1
-            await self.db.commit()
+                url_obj.crawl_status = URLCrawlStatus.CHECKED.value
+                url_obj.last_checked_at = datetime.utcnow()
+                self.job.total_urls_checked += 1
+                self.domain.crawled_urls += 1
+                await self.db.commit()
 
         except httpx.TimeoutException as e:
-            url_obj.crawl_status = URLCrawlStatus.FAILED.value
-            url_obj.status_category = URLStatusCategory.TIMEOUT.value
-            url_obj.error_details = f"Timeout: {str(e)}"
-            await self.db.commit()
+            async with self.db_lock:
+                url_obj.crawl_status = URLCrawlStatus.FAILED.value
+                url_obj.status_category = URLStatusCategory.TIMEOUT.value
+                url_obj.error_details = f"Timeout: {str(e)}"
+                await self.db.commit()
             await self.log_event("error", f"Crawl timeout for {url_obj.url}", event_type="crawl_timeout", entity_type="url", entity_id=str(url_obj.id))
 
         except httpx.ConnectError as e:
-            url_obj.crawl_status = URLCrawlStatus.FAILED.value
-            url_obj.status_category = URLStatusCategory.DNS_ERROR.value
-            url_obj.error_details = f"Connection error: {str(e)}"
-            await self.db.commit()
+            async with self.db_lock:
+                url_obj.crawl_status = URLCrawlStatus.FAILED.value
+                url_obj.status_category = URLStatusCategory.DNS_ERROR.value
+                url_obj.error_details = f"Connection error: {str(e)}"
+                await self.db.commit()
             await self.log_event("error", f"Connection error for {url_obj.url}", event_type="crawl_connection_error", entity_type="url", entity_id=str(url_obj.id))
 
         except Exception as e:
-            url_obj.crawl_status = URLCrawlStatus.FAILED.value
-            url_obj.status_category = URLStatusCategory.NETWORK_ERROR.value
-            url_obj.error_details = f"Unhandled error: {str(e)}"
-            await self.db.commit()
+            async with self.db_lock:
+                url_obj.crawl_status = URLCrawlStatus.FAILED.value
+                url_obj.status_category = URLStatusCategory.NETWORK_ERROR.value
+                url_obj.error_details = f"Unhandled error: {str(e)}"
+                await self.db.commit()
             await self.log_event("error", f"Crawl failed for {url_obj.url}: {str(e)}", event_type="crawl_url_failed", entity_type="url", entity_id=str(url_obj.id))
 
         # Periodic updates to the UI / stats (e.g. every 10 checked URLs)
@@ -540,57 +547,58 @@ class CrawlerEngine:
 
     async def _update_job_progress(self):
         """Recalculate and update database stats on the CrawlJob"""
-        # Load stats for checked URLs in this job's domain
-        stmt = select(
-            URL.status_category, 
-            URL.status_code, 
-            URL.response_time_ms
-        ).where(URL.domain_id == self.domain.id, URL.crawl_status == URLCrawlStatus.CHECKED.value)
-        
-        result = await self.db.execute(stmt)
-        rows = list(result.all())
+        async with self.db_lock:
+            # Load stats for checked URLs in this job's domain
+            stmt = select(
+                URL.status_category, 
+                URL.status_code, 
+                URL.response_time_ms
+            ).where(URL.domain_id == self.domain.id, URL.crawl_status == URLCrawlStatus.CHECKED.value)
+            
+            result = await self.db.execute(stmt)
+            rows = list(result.all())
 
-        if not rows:
-            return
+            if not rows:
+                return
 
-        total_checked = len(rows)
-        resp_times = [r[2] for r in rows if r[2] is not None]
-        avg_resp_time = int(sum(resp_times) / len(resp_times)) if resp_times else None
+            total_checked = len(rows)
+            resp_times = [r[2] for r in rows if r[2] is not None]
+            avg_resp_time = int(sum(resp_times) / len(resp_times)) if resp_times else None
 
-        # Reset counts
-        c_2xx = c_3xx = c_4xx = c_5xx = c_timeout = c_dns = c_ssl = 0
-        for cat, code, _ in rows:
-            if cat == URLStatusCategory.TIMEOUT.value:
-                c_timeout += 1
-            elif cat == URLStatusCategory.DNS_ERROR.value:
-                c_dns += 1
-            elif cat == URLStatusCategory.SSL_ERROR.value:
-                c_ssl += 1
-            elif code:
-                if 200 <= code < 300:
-                    c_2xx += 1
-                elif 300 <= code < 400:
-                    c_3xx += 1
-                elif 400 <= code < 500:
-                    c_4xx += 1
-                elif code >= 500:
-                    c_5xx += 1
+            # Reset counts
+            c_2xx = c_3xx = c_4xx = c_5xx = c_timeout = c_dns = c_ssl = 0
+            for cat, code, _ in rows:
+                if cat == URLStatusCategory.TIMEOUT.value:
+                    c_timeout += 1
+                elif cat == URLStatusCategory.DNS_ERROR.value:
+                    c_dns += 1
+                elif cat == URLStatusCategory.SSL_ERROR.value:
+                    c_ssl += 1
+                elif code:
+                    if 200 <= code < 300:
+                        c_2xx += 1
+                    elif 300 <= code < 400:
+                        c_3xx += 1
+                    elif 400 <= code < 500:
+                        c_4xx += 1
+                    elif code >= 500:
+                        c_5xx += 1
 
-        self.job.avg_response_time_ms = avg_resp_time
-        self.job.urls_2xx = c_2xx
-        self.job.urls_3xx = c_3xx
-        self.job.urls_4xx = c_4xx
-        self.job.urls_5xx = c_5xx
-        self.job.urls_timeout = c_timeout
-        self.job.urls_dns_error = c_dns
-        self.job.urls_ssl_error = c_ssl
+            self.job.avg_response_time_ms = avg_resp_time
+            self.job.urls_2xx = c_2xx
+            self.job.urls_3xx = c_3xx
+            self.job.urls_4xx = c_4xx
+            self.job.urls_5xx = c_5xx
+            self.job.urls_timeout = c_timeout
+            self.job.urls_dns_error = c_dns
+            self.job.urls_ssl_error = c_ssl
 
-        # Calculate speed
-        elapsed_sec = (datetime.utcnow() - self.job.started_at).total_seconds()
-        if elapsed_sec > 0:
-            self.job.crawl_speed_urls_per_sec = round(total_checked / elapsed_sec, 2)
+            # Calculate speed
+            elapsed_sec = (datetime.utcnow() - self.job.started_at).total_seconds()
+            if elapsed_sec > 0:
+                self.job.crawl_speed_urls_per_sec = round(total_checked / elapsed_sec, 2)
 
-        await self.db.commit()
+            await self.db.commit()
 
     async def _stage_reporting(self):
         """Detect duplication, generate issues reports and populate statistics tables"""
