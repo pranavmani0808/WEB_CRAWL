@@ -689,7 +689,10 @@ export default function Dashboard() {
                 </div>
               </div>
 
-              {/* Grid: Metrics and Status Breakdown */}
+              {/* Grid: Metrics and Status Breakdown - only meaningful once the
+                  crawl has actually finished; mid-crawl these are all
+                  0/partial and just look broken. */}
+              {jobDetails.status === "completed" && (
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 {/* Progress Card */}
                 <div className="bg-slate-900/50 border border-slate-900 p-6 rounded-2xl flex flex-col justify-between">
@@ -742,9 +745,12 @@ export default function Dashboard() {
                   </div>
                 </div>
               </div>
+              )}
 
-              {/* Grid: Console Logs & URL Table */}
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+              {/* Grid: Console Logs & URL Table - the URL table only appears
+                  once the crawl is done; the activity log stays visible the
+                  whole time and just takes the full row until then. */}
+              <div className={`grid grid-cols-1 ${jobDetails.status === "completed" ? "lg:grid-cols-3" : ""} gap-8`}>
                 {/* Real-time Activity Terminal */}
                 <div className="bg-slate-900/50 border border-slate-900 rounded-2xl flex flex-col h-96 overflow-hidden">
                   <div className="border-b border-slate-900 px-4 py-3 bg-slate-900/30 flex items-center justify-between">
@@ -770,7 +776,8 @@ export default function Dashboard() {
                   </div>
                 </div>
 
-                {/* Audited URLs List */}
+                {/* Audited URLs List - only after a successful crawl */}
+                {jobDetails.status === "completed" && (
                 <div className="lg:col-span-2 bg-slate-900/50 border border-slate-900 rounded-2xl flex flex-col h-96 overflow-hidden">
                   {/* Filter Toolbar */}
                   <div className="border-b border-slate-900 px-6 py-4 bg-slate-900/30 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -880,6 +887,7 @@ export default function Dashboard() {
                     </table>
                   </div>
                 </div>
+                )}
               </div>
             </>
           ) : (
