@@ -4,8 +4,8 @@ import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import axios from "axios";
 import {
-  Play, RotateCw, AlertCircle, Globe, ShieldAlert,
-  Clock, Activity, ShieldCheck, Check, Server, Terminal, List, Search,
+  Play, RotateCw, Globe,
+  Clock, Activity, Check, Server, Terminal, List, Search,
   Pause, Trash2, StopCircle, Download, LogOut
 } from "lucide-react";
 import { restoreSession, clearSession, AuthUser } from "@/lib/auth";
@@ -654,35 +654,8 @@ export default function Dashboard() {
                 </div>
               </div>
 
-              {/* Grid: Metrics, Health Score, and Status Breakdown */}
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-                {/* Health Score Card */}
-                <div className="bg-gradient-to-br from-slate-900 to-slate-950 border border-slate-900 p-6 rounded-2xl flex flex-col items-center justify-center relative overflow-hidden">
-                  <div className="absolute top-0 right-0 h-24 w-24 bg-indigo-500/5 rounded-full blur-2xl"></div>
-                  <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-4">Site Health Score</h3>
-                  <div className="relative flex items-center justify-center">
-                    <div className="h-28 w-28 rounded-full border-4 border-slate-850 flex flex-col items-center justify-center bg-slate-900/50">
-                      <span className="text-4xl font-extrabold text-white">
-                        {jobDetails.stats?.health_score !== null && jobDetails.stats?.health_score !== undefined ? jobDetails.stats.health_score : "-"}
-                      </span>
-                      <span className="text-[10px] text-slate-400">/ 100</span>
-                    </div>
-                  </div>
-                  <div className="mt-4 text-xs text-center text-slate-400">
-                    {jobDetails.stats?.health_score !== null && jobDetails.stats?.health_score !== undefined ? (
-                      jobDetails.stats.health_score > 90 ? (
-                        <span className="text-emerald-400 flex items-center gap-1"><ShieldCheck className="h-3.5 w-3.5" /> Excellent SEO Health</span>
-                      ) : jobDetails.stats.health_score > 60 ? (
-                        <span className="text-amber-400 flex items-center gap-1"><AlertCircle className="h-3.5 w-3.5" /> Warning: Fix issues</span>
-                      ) : (
-                        <span className="text-red-400 flex items-center gap-1"><ShieldAlert className="h-3.5 w-3.5" /> Critical issues detected</span>
-                      )
-                    ) : (
-                      <span>Awaiting audits...</span>
-                    )}
-                  </div>
-                </div>
-
+              {/* Grid: Metrics and Status Breakdown */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 {/* Progress Card */}
                 <div className="bg-slate-900/50 border border-slate-900 p-6 rounded-2xl flex flex-col justify-between">
                   <div>
@@ -814,12 +787,10 @@ export default function Dashboard() {
                           <th className="px-6 py-3">Status</th>
                           <th className="px-6 py-3">Time</th>
                           <th className="px-6 py-3">Type</th>
-                          <th className="px-6 py-3">Issues</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-900 text-xs text-slate-300">
                         {filteredUrls.map((u) => {
-                          const issuesCount = u.seo_issues?.length || 0;
                           return (
                             <tr key={u.id} className="hover:bg-slate-900/20 transition">
                               <td className="px-6 py-3.5 font-medium text-white max-w-sm truncate" title={u.url}>
@@ -850,19 +821,12 @@ export default function Dashboard() {
                               <td className="px-6 py-3.5 text-slate-400">
                                 {u.content_type || "-"}
                               </td>
-                              <td className="px-6 py-3.5">
-                                {issuesCount > 0 ? (
-                                  <span className="text-amber-400 font-semibold">{issuesCount} issues</span>
-                                ) : (
-                                  <span className="text-emerald-400 flex items-center gap-1"><Check className="h-3.5 w-3.5" /> Clean</span>
-                                )}
-                              </td>
                             </tr>
                           );
                         })}
                         {filteredUrls.length === 0 && (
                           <tr>
-                            <td colSpan={5} className="text-center py-12 text-slate-500">No audited URLs match filters.</td>
+                            <td colSpan={4} className="text-center py-12 text-slate-500">No audited URLs match filters.</td>
                           </tr>
                         )}
                       </tbody>
