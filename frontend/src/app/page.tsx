@@ -382,21 +382,27 @@ export default function Dashboard() {
         {/* Sidebar: Crawl Jobs List */}
         <aside className="w-80 border-r border-slate-900 bg-slate-900/20 p-6 flex flex-col space-y-6 overflow-y-auto">
           {/* Crawl Trigger Form */}
-          <div className="space-y-3">
-            <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-400">Audit New Site</h2>
-            <form onSubmit={handleStartCrawl} className="flex flex-col space-y-2">
-              <input
-                type="text"
-                placeholder="e.g. https://example.com"
-                value={urlInput}
-                onChange={(e) => setUrlInput(e.target.value)}
-                disabled={isSubmitting}
-                className="w-full rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-              />
+          <div className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5 space-y-4">
+            <div>
+              <h2 className="text-lg font-bold text-white">Add your domain</h2>
+              <p className="mt-1 text-xs text-slate-400">Enter a domain address to get started.</p>
+            </div>
+            <form onSubmit={handleStartCrawl} className="space-y-3">
+              <div className="relative">
+                <Globe className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                <input
+                  type="text"
+                  placeholder="https://example.com"
+                  value={urlInput}
+                  onChange={(e) => setUrlInput(e.target.value)}
+                  disabled={isSubmitting}
+                  className="w-full rounded-xl border border-slate-800 bg-slate-950 py-3 pl-10 pr-3 text-sm text-white placeholder-slate-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                />
+              </div>
               <button
                 type="submit"
                 disabled={isSubmitting}
-                className="flex items-center justify-center space-x-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-md shadow-indigo-600/10 hover:bg-indigo-500 focus:outline-none disabled:opacity-50"
+                className="flex w-full items-center justify-center space-x-2 rounded-xl bg-indigo-600 px-4 py-3 text-sm font-semibold text-white shadow-md shadow-indigo-600/20 transition hover:bg-indigo-500 focus:outline-none disabled:opacity-50"
               >
                 {isSubmitting ? (
                   <RotateCw className="h-4 w-4 animate-spin" />
