@@ -9,6 +9,7 @@ import {
   Pause, Trash2, StopCircle, Download, LogOut
 } from "lucide-react";
 import { restoreSession, clearSession, AuthUser } from "@/lib/auth";
+import Homepage, { PENDING_URL_KEY } from "@/components/Homepage";
 
 // Configure base API url
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -235,15 +236,22 @@ export default function Dashboard() {
     }
   };
 
-  // Restore session on mount; bounce to /login if there isn't one.
+  // Restore session on mount; show the marketing homepage if there isn't one.
   useEffect(() => {
     const restored = restoreSession();
     if (!restored) {
-      router.replace("/login");
+      setAuthChecked(true);
       return;
     }
     setUser(restored);
     setAuthChecked(true);
+
+    // Pick up a domain entered on the homepage before signing in.
+    const pendingUrl = localStorage.getItem(PENDING_URL_KEY);
+    if (pendingUrl) {
+      setUrlInput(pendingUrl);
+      localStorage.removeItem(PENDING_URL_KEY);
+    }
 
     // If the token expires/becomes invalid mid-session, any request will 401 -
     // catch that globally and send the user back to login.
@@ -266,11 +274,11 @@ export default function Dashboard() {
   };
 
   useEffect(() => {
-    if (authChecked) loadJobs();
-  }, [authChecked]);
+    if (authChecked && user) loadJobs();
+  }, [authChecked, user]);
 
   useEffect(() => {
-    if (activeJobId && authChecked) {
+    if (activeJobId && authChecked && user) {
       loadJobDetails(activeJobId);
       // Always poll while a job is active or pending
       const interval = setInterval(() => {
@@ -326,6 +334,10 @@ export default function Dashboard() {
         Loading...
       </div>
     );
+  }
+
+  if (!user) {
+    return <Homepage />;
   }
 
   return (
