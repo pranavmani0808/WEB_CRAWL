@@ -1,9 +1,11 @@
 import logging
-from fastapi import FastAPI, Request, status
+from fastapi import Depends, FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from app.core.config import settings
 from app.core.exceptions import CrawlerException
+from app.core.security import create_access_token, create_refresh_token, get_password_hash, verify_password
+from app.core.auth_deps import get_current_user
 from app.database.database import init_db, close_db
 from app.models.domain import Domain
 from app.models.crawl_job import CrawlJob
@@ -14,7 +16,7 @@ from app.models.user import User
 from app.workers.tasks import crawl_domain_task
 import uuid
 from urllib.parse import urlparse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -111,11 +113,97 @@ async def health_check():
         "project": settings.PROJECT_NAME
     }
 
+# ---------------------------------------------------------------------------
+# Auth
+# ---------------------------------------------------------------------------
+
+class RegisterRequest(BaseModel):
+    email: str
+    username: str
+    password: str = Field(min_length=8)
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, v: str) -> str:
+        v = v.strip().lower()
+        if "@" not in v or "." not in v.split("@")[-1]:
+            raise ValueError("Invalid email address")
+        return v
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class AuthResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    user: dict
+
+
+def _user_public(user: User) -> dict:
+    return {"id": str(user.id), "email": user.email, "username": user.username}
+
+
+@app.post("/api/auth/register", tags=["Auth"])
+async def register(req: RegisterRequest):
+    """Create a new user account."""
+    existing = await User.find_one(User.email == req.email)
+    if existing:
+        return JSONResponse(status_code=409, content={"message": "An account with this email already exists"})
+
+    existing_username = await User.find_one(User.username == req.username)
+    if existing_username:
+        return JSONResponse(status_code=409, content={"message": "This username is already taken"})
+
+    user = User(
+        email=req.email,
+        username=req.username,
+        password_hash=get_password_hash(req.password),
+    )
+    await user.insert()
+
+    return AuthResponse(
+        access_token=create_access_token(user.id),
+        refresh_token=create_refresh_token(user.id),
+        user=_user_public(user),
+    )
+
+
+@app.post("/api/auth/login", tags=["Auth"])
+async def login(req: LoginRequest):
+    """Authenticate with email + password and receive JWT tokens."""
+    user = await User.find_one(User.email == req.email.strip().lower())
+    if not user or not verify_password(req.password, user.password_hash):
+        return JSONResponse(status_code=401, content={"message": "Incorrect email or password"})
+
+    if not user.is_active:
+        return JSONResponse(status_code=403, content={"message": "This account has been deactivated"})
+
+    return AuthResponse(
+        access_token=create_access_token(user.id),
+        refresh_token=create_refresh_token(user.id),
+        user=_user_public(user),
+    )
+
+
+@app.get("/api/auth/me", tags=["Auth"])
+async def get_me(current_user: User = Depends(get_current_user)):
+    """Return the currently authenticated user."""
+    return _user_public(current_user)
+
+
+# ---------------------------------------------------------------------------
+# Crawl
+# ---------------------------------------------------------------------------
+
 class CrawlRequest(BaseModel):
     url: str
 
 @app.post("/api/crawl", tags=["Crawl"])
-async def start_crawl_endpoint(req: CrawlRequest):
+async def start_crawl_endpoint(req: CrawlRequest, current_user: User = Depends(get_current_user)):
     """Start a crawl job for the specified URL"""
     url = req.url.strip()
     if not url.startswith(('http://', 'https://')):
@@ -124,19 +212,7 @@ async def start_crawl_endpoint(req: CrawlRequest):
     parsed = urlparse(url)
     domain_name = parsed.netloc or parsed.path.split('/')[0]
 
-    # Mock a default user ID for development
-    user_id = uuid.UUID("00000000-0000-0000-0000-000000000000")
-
-    # Ensure default user exists
-    user = await User.find_one(User.id == user_id)
-    if not user:
-        user = User(
-            id=user_id,
-            email="dev@example.com",
-            username="developer",
-            password_hash="dev-hash"
-        )
-        await user.insert()
+    user_id = current_user.id
 
     # Get or create Domain
     normalized_url = f"{parsed.scheme}://{domain_name}"
@@ -170,9 +246,9 @@ async def start_crawl_endpoint(req: CrawlRequest):
     return {"job_id": str(job.id), "domain_id": str(domain.id)}
 
 @app.get("/api/crawl/jobs", tags=["Crawl"])
-async def list_crawl_jobs():
-    """List all crawl jobs with associated domains"""
-    jobs = await CrawlJob.find().sort("-created_at").to_list(None)
+async def list_crawl_jobs(current_user: User = Depends(get_current_user)):
+    """List all crawl jobs belonging to the current user, with associated domains"""
+    jobs = await CrawlJob.find(CrawlJob.user_id == current_user.id).sort("-created_at").to_list(None)
 
     # Batch fetch domains to avoid N+1 query overhead
     domain_ids = list({j.domain_id for j in jobs})
@@ -195,7 +271,7 @@ async def list_crawl_jobs():
     return result
 
 @app.get("/api/crawl/jobs/{job_id}", tags=["Crawl"])
-async def get_crawl_job(job_id: str):
+async def get_crawl_job(job_id: str, current_user: User = Depends(get_current_user)):
     """Get details, stats and logs for a specific crawl job"""
     try:
         job_uuid = uuid.UUID(job_id)
@@ -204,7 +280,7 @@ async def get_crawl_job(job_id: str):
 
     job = await CrawlJob.get(job_uuid)
 
-    if not job:
+    if not job or job.user_id != current_user.id:
         return JSONResponse(status_code=404, content={"message": "Job not found"})
 
     # Fetch domain
@@ -257,7 +333,7 @@ async def get_crawl_job(job_id: str):
     }
 
 @app.get("/api/crawl/jobs/{job_id}/urls", tags=["Crawl"])
-async def list_job_urls(job_id: str):
+async def list_job_urls(job_id: str, current_user: User = Depends(get_current_user)):
     """List all URLs crawled for a specific job"""
     try:
         job_uuid = uuid.UUID(job_id)
@@ -266,7 +342,7 @@ async def list_job_urls(job_id: str):
 
     # Fetch job
     job = await CrawlJob.get(job_uuid)
-    if not job:
+    if not job or job.user_id != current_user.id:
         return JSONResponse(status_code=404, content={"message": "Job not found"})
 
     # Fetch URLs for this domain
@@ -287,7 +363,7 @@ async def list_job_urls(job_id: str):
 
 
 @app.post("/api/crawl/jobs/{job_id}/retry", tags=["Crawl"])
-async def retry_crawl_job(job_id: str):
+async def retry_crawl_job(job_id: str, current_user: User = Depends(get_current_user)):
     """Re-dispatch a stuck or failed crawl job back into the Celery queue."""
     try:
         job_uuid = uuid.UUID(job_id)
@@ -296,7 +372,7 @@ async def retry_crawl_job(job_id: str):
 
     job = await CrawlJob.get(job_uuid)
 
-    if not job:
+    if not job or job.user_id != current_user.id:
         return JSONResponse(status_code=404, content={"message": "Job not found"})
 
     # Reset job status so the engine re-runs it
@@ -309,7 +385,6 @@ async def retry_crawl_job(job_id: str):
     job.urls_5xx = 0
     job.urls_timeout = 0
     job.urls_dns_error = 0
-    job.started_at = None
     job.completed_at = None
     await job.save()
 
@@ -319,9 +394,12 @@ async def retry_crawl_job(job_id: str):
 
 
 @app.post("/api/crawl/jobs/retry-pending", tags=["Crawl"])
-async def retry_all_pending_jobs():
-    """Re-dispatch all jobs currently stuck in pending state."""
-    jobs = await CrawlJob.find(CrawlJob.status == "pending").to_list(None)
+async def retry_all_pending_jobs(current_user: User = Depends(get_current_user)):
+    """Re-dispatch all of the current user's jobs currently stuck in pending state."""
+    jobs = await CrawlJob.find(
+        CrawlJob.status == "pending",
+        CrawlJob.user_id == current_user.id,
+    ).to_list(None)
 
     dispatched = []
     for job in jobs:
@@ -332,7 +410,7 @@ async def retry_all_pending_jobs():
 
 
 @app.post("/api/crawl/jobs/{job_id}/pause", tags=["Crawl"])
-async def pause_crawl_job(job_id: str):
+async def pause_crawl_job(job_id: str, current_user: User = Depends(get_current_user)):
     """Pause a running crawl job by marking its status as paused."""
     try:
         job_uuid = uuid.UUID(job_id)
@@ -341,7 +419,7 @@ async def pause_crawl_job(job_id: str):
 
     job = await CrawlJob.get(job_uuid)
 
-    if not job:
+    if not job or job.user_id != current_user.id:
         return JSONResponse(status_code=404, content={"message": "Job not found"})
 
     if job.status not in ("running", "pending"):
@@ -356,7 +434,7 @@ async def pause_crawl_job(job_id: str):
 
 
 @app.post("/api/crawl/jobs/{job_id}/resume", tags=["Crawl"])
-async def resume_crawl_job(job_id: str):
+async def resume_crawl_job(job_id: str, current_user: User = Depends(get_current_user)):
     """Resume a paused crawl job by re-dispatching it."""
     try:
         job_uuid = uuid.UUID(job_id)
@@ -365,7 +443,7 @@ async def resume_crawl_job(job_id: str):
 
     job = await CrawlJob.get(job_uuid)
 
-    if not job:
+    if not job or job.user_id != current_user.id:
         return JSONResponse(status_code=404, content={"message": "Job not found"})
 
     if job.status != "paused":
@@ -381,7 +459,7 @@ async def resume_crawl_job(job_id: str):
 
 
 @app.delete("/api/crawl/jobs/{job_id}", tags=["Crawl"])
-async def delete_crawl_job(job_id: str):
+async def delete_crawl_job(job_id: str, current_user: User = Depends(get_current_user)):
     """Permanently delete a crawl job and all associated data."""
     try:
         job_uuid = uuid.UUID(job_id)
@@ -390,7 +468,7 @@ async def delete_crawl_job(job_id: str):
 
     job = await CrawlJob.get(job_uuid)
 
-    if not job:
+    if not job or job.user_id != current_user.id:
         return JSONResponse(status_code=404, content={"message": "Job not found"})
 
     # Delete associated logs

@@ -65,20 +65,22 @@ class CrawlerEngine:
         else:
             logger.info(log_msg)
 
-        async with self.db_lock:
-            try:
-                log_entry = CrawlLog(
-                    crawl_job_id=self.crawl_job_id,
-                    level=level,
-                    message=message,
-                    event_type=event_type,
-                    entity_type=entity_type,
-                    entity_id=entity_id,
-                    details=details or {}
-                )
-                await log_entry.insert()
-            except Exception as e:
-                logger.error(f"Failed to write log to DB: {e}")
+        # Each call inserts its own independent CrawlLog document - no shared
+        # state to protect, so no lock needed even though this runs from many
+        # concurrent crawl tasks at once.
+        try:
+            log_entry = CrawlLog(
+                crawl_job_id=self.crawl_job_id,
+                level=level,
+                message=message,
+                event_type=event_type,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                details=details or {}
+            )
+            await log_entry.insert()
+        except Exception as e:
+            logger.error(f"Failed to write log to DB: {e}")
 
     async def execute(self):
         """Execute the crawl pipeline"""
@@ -430,18 +432,16 @@ class CrawlerEngine:
 
     async def _stage_http_checking(self, client: httpx.AsyncClient):
         """Asynchronously crawl URLs dynamically using a polling queue with concurrency limit"""
-        async with self.db_lock:
-            self.job.stage_http_checking = True
-            await self.job.save()
+        self.job.stage_http_checking = True
+        await self.job.save()
 
         await self.log_event("info", "Starting HTTP Checking stage", event_type="stage_http_checking_started")
 
-        # Get initial list of pending URLs
-        async with self.db_lock:
-            urls = await URL.find(
-                URL.domain_id == self.domain.id,
-                URL.crawl_status == URLCrawlStatus.PENDING.value
-            ).to_list(None)
+        # Get initial list of pending URLs (plain read, no shared state involved)
+        urls = await URL.find(
+            URL.domain_id == self.domain.id,
+            URL.crawl_status == URLCrawlStatus.PENDING.value
+        ).to_list(None)
 
         if not urls:
             await self.log_event("warning", "No pending URLs found for crawling.", event_type="no_urls_found")
@@ -465,17 +465,16 @@ class CrawlerEngine:
             task = asyncio.create_task(crawl_and_release(url_obj))
             running_tasks.add(task)
 
-        # Main polling loop to check for new dynamically queued URLs
+        # Main polling loop to check for new dynamically queued URLs (link-discovered
+        # during the crawl). 1s is plenty responsive here and avoids hammering Atlas
+        # with a full collection scan 10x/sec for the entire crawl duration.
         while True:
-            # Wait a short duration
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(1.0)
 
-            # Query database for new pending URLs
-            async with self.db_lock:
-                pending_urls = await URL.find(
-                    URL.domain_id == self.domain.id,
-                    URL.crawl_status == URLCrawlStatus.PENDING.value
-                ).to_list(None)
+            pending_urls = await URL.find(
+                URL.domain_id == self.domain.id,
+                URL.crawl_status == URLCrawlStatus.PENDING.value
+            ).to_list(None)
 
             # Filter out URLs already in queue or processing
             new_urls = [u for u in pending_urls if u.url not in active_urls]
@@ -494,11 +493,15 @@ class CrawlerEngine:
         await self._update_job_progress()
 
     async def _crawl_single_url(self, client: httpx.AsyncClient, url_obj: URL):
-        """Crawl a single URL and save result to database"""
-        async with self.db_lock:
-            url_obj.crawl_status = URLCrawlStatus.CHECKING.value
-            url_obj.crawl_attempt += 1
-            await url_obj.save()
+        """Crawl a single URL and save result to database.
+
+        Each concurrent task owns a distinct url_obj, so these saves don't need
+        db_lock - only self.job/self.domain mutations (shared across all tasks)
+        do, and only around the increment+save itself, not the whole request.
+        """
+        url_obj.crawl_status = URLCrawlStatus.CHECKING.value
+        url_obj.crawl_attempt += 1
+        await url_obj.save()
 
         start_time = time.time()
         logger.info(f"Crawl HTTP request started: {url_obj.url}")
@@ -509,31 +512,30 @@ class CrawlerEngine:
             response_time_ms = int((time.time() - start_time) * 1000)
 
             # Update URL details (first phase commit)
-            async with self.db_lock:
-                url_obj.status_code = response.status_code
-                url_obj.final_url = str(response.url)
-                url_obj.response_time_ms = response_time_ms
-                url_obj.content_type = response.headers.get("content-type", "").split(";")[0].strip()
-                url_obj.content_length = int(response.headers.get("content-length", 0))
+            url_obj.status_code = response.status_code
+            url_obj.final_url = str(response.url)
+            url_obj.response_time_ms = response_time_ms
+            url_obj.content_type = response.headers.get("content-type", "").split(";")[0].strip()
+            url_obj.content_length = int(response.headers.get("content-length", 0))
 
-                # Categorize status code
-                if 200 <= response.status_code < 300:
-                    url_obj.status_category = URLStatusCategory.SUCCESS.value
-                elif 300 <= response.status_code < 400:
-                    url_obj.status_category = URLStatusCategory.REDIRECT.value
-                elif 400 <= response.status_code < 500:
-                    url_obj.status_category = URLStatusCategory.CLIENT_ERROR.value
-                elif response.status_code >= 500:
-                    url_obj.status_category = URLStatusCategory.SERVER_ERROR.value
+            # Categorize status code
+            if 200 <= response.status_code < 300:
+                url_obj.status_category = URLStatusCategory.SUCCESS.value
+            elif 300 <= response.status_code < 400:
+                url_obj.status_category = URLStatusCategory.REDIRECT.value
+            elif 400 <= response.status_code < 500:
+                url_obj.status_category = URLStatusCategory.CLIENT_ERROR.value
+            elif response.status_code >= 500:
+                url_obj.status_category = URLStatusCategory.SERVER_ERROR.value
 
-                # Extract redirects
-                redirects = []
-                if response.history:
-                    redirects = [str(r.url) for r in response.history]
-                url_obj.redirect_chain = redirects
-                await url_obj.save()
+            # Extract redirects
+            redirects = []
+            if response.history:
+                redirects = [str(r.url) for r in response.history]
+            url_obj.redirect_chain = redirects
+            await url_obj.save()
 
-            # Extract SEO data outside the lock
+            # Extract SEO data
             seo_data = None
             issues = []
             soup = None
@@ -545,7 +547,6 @@ class CrawlerEngine:
                 except Exception as e:
                     logger.error(f"Error parsing HTML for {url_obj.url}: {e}")
 
-            # Log issues outside the lock to prevent deadlock
             for issue in issues:
                 await self.log_event(
                     level=issue['type'],
@@ -557,49 +558,49 @@ class CrawlerEngine:
                 )
 
             # Finalize URL check (second phase commit)
-            async with self.db_lock:
-                if seo_data:
-                    # Check indexability
-                    robots = seo_data.get('robots', '').lower()
-                    url_obj.is_indexable = 'noindex' not in robots
-                    url_obj.canonical_url = seo_data.get('canonical_url')
-                    url_obj.robots_meta = seo_data.get('robots')
-                    url_obj.meta_data = seo_data
+            if seo_data:
+                # Check indexability
+                robots = seo_data.get('robots', '').lower()
+                url_obj.is_indexable = 'noindex' not in robots
+                url_obj.canonical_url = seo_data.get('canonical_url')
+                url_obj.robots_meta = seo_data.get('robots')
+                url_obj.meta_data = seo_data
 
-                url_obj.crawl_status = URLCrawlStatus.CHECKED.value
-                url_obj.last_checked_at = datetime.utcnow()
+            url_obj.crawl_status = URLCrawlStatus.CHECKED.value
+            url_obj.last_checked_at = datetime.utcnow()
+            await url_obj.save()
+
+            # self.job/self.domain are shared across all concurrent tasks, so the
+            # increment+save is kept under the lock; everything above this is not.
+            async with self.db_lock:
                 self.job.total_urls_checked += 1
                 self.domain.crawled_urls += 1
-                await url_obj.save()
                 await self.job.save()
                 await self.domain.save()
 
-            # Queue discovered internal links outside lock
+            # Queue discovered internal links
             if soup:
                 await self._extract_and_queue_links(soup, url_obj.url)
 
         except httpx.TimeoutException as e:
-            async with self.db_lock:
-                url_obj.crawl_status = URLCrawlStatus.FAILED.value
-                url_obj.status_category = URLStatusCategory.TIMEOUT.value
-                url_obj.error_details = f"Timeout: {str(e)}"
-                await url_obj.save()
+            url_obj.crawl_status = URLCrawlStatus.FAILED.value
+            url_obj.status_category = URLStatusCategory.TIMEOUT.value
+            url_obj.error_details = f"Timeout: {str(e)}"
+            await url_obj.save()
             await self.log_event("error", f"Crawl timeout for {url_obj.url}", event_type="crawl_timeout", entity_type="url", entity_id=str(url_obj.id))
 
         except httpx.ConnectError as e:
-            async with self.db_lock:
-                url_obj.crawl_status = URLCrawlStatus.FAILED.value
-                url_obj.status_category = URLStatusCategory.DNS_ERROR.value
-                url_obj.error_details = f"Connection error: {str(e)}"
-                await url_obj.save()
+            url_obj.crawl_status = URLCrawlStatus.FAILED.value
+            url_obj.status_category = URLStatusCategory.DNS_ERROR.value
+            url_obj.error_details = f"Connection error: {str(e)}"
+            await url_obj.save()
             await self.log_event("error", f"Connection error for {url_obj.url}", event_type="crawl_connection_error", entity_type="url", entity_id=str(url_obj.id))
 
         except Exception as e:
-            async with self.db_lock:
-                url_obj.crawl_status = URLCrawlStatus.FAILED.value
-                url_obj.status_category = URLStatusCategory.NETWORK_ERROR.value
-                url_obj.error_details = f"Unhandled error: {str(e)}"
-                await url_obj.save()
+            url_obj.crawl_status = URLCrawlStatus.FAILED.value
+            url_obj.status_category = URLStatusCategory.NETWORK_ERROR.value
+            url_obj.error_details = f"Unhandled error: {str(e)}"
+            await url_obj.save()
             await self.log_event("error", f"Crawl failed for {url_obj.url}: {str(e)}", event_type="crawl_url_failed", entity_type="url", entity_id=str(url_obj.id))
 
         # Periodic updates to the UI / stats (e.g. every 10 checked URLs)
