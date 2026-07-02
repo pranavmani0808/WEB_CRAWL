@@ -316,54 +316,11 @@ export default function Dashboard() {
 
       {/* Main Content Area */}
       <div className="flex flex-1 overflow-hidden">
-        {/* Sidebar: Crawl Jobs List */}
-        <aside className="w-80 border-r border-slate-900 bg-slate-900/20 p-6 flex flex-col space-y-6 overflow-y-auto">
-          {/* Crawl Trigger Form */}
-          <div className="relative overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/50 p-5 space-y-4">
-            <div className="pointer-events-none absolute -right-8 -top-8 h-28 w-28 rounded-full bg-indigo-500/10 blur-2xl" />
-            <div className="relative flex items-center gap-3">
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-indigo-500/20 bg-indigo-500/10 text-indigo-400">
-                <Sparkles className="h-4 w-4" />
-              </div>
-              <div>
-                <h2 className="text-base font-bold text-white">Add your domain</h2>
-                <p className="mt-0.5 text-xs text-slate-400">Enter a domain address to get started.</p>
-              </div>
-            </div>
-            <form onSubmit={handleStartCrawl} className="relative space-y-3">
-              <div className="relative">
-                <Globe className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
-                <input
-                  type="text"
-                  placeholder="https://example.com"
-                  value={urlInput}
-                  onChange={(e) => setUrlInput(e.target.value)}
-                  disabled={isSubmitting}
-                  className="w-full rounded-xl border border-slate-800 bg-slate-950 py-3 pl-10 pr-3 text-sm text-white placeholder-slate-500 transition focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                />
-              </div>
-              <button
-                type="submit"
-                disabled={isSubmitting}
-                className="flex w-full items-center justify-center space-x-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-indigo-600/25 transition hover:shadow-indigo-500/40 focus:outline-none disabled:opacity-50"
-              >
-                {isSubmitting ? (
-                  <RotateCw className="h-4 w-4 animate-spin" />
-                ) : (
-                  <>
-                    <Play className="h-4 w-4 fill-current" />
-                    <span>Start Audit</span>
-                  </>
-                )}
-              </button>
-            </form>
-          </div>
-
-          <hr className="border-slate-900" />
-
+        {/* Dashboard Panels */}
+        <main className="flex-1 p-8 overflow-y-auto space-y-8">
           {/* Retry-all banner for stuck jobs */}
           {hasPendingJobs && (
-            <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 px-3 py-2.5 flex items-center justify-between">
+            <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3 flex items-center justify-between">
               <div className="text-xs text-amber-400">
                 <span className="font-semibold">Jobs stuck?</span> Re-queue all
               </div>
@@ -382,12 +339,45 @@ export default function Dashboard() {
             </div>
           )}
 
-        </aside>
-
-        {/* Dashboard Panels */}
-        <main className="flex-1 p-8 overflow-y-auto space-y-8">
           {jobDetails ? (
             <>
+              {/* Compact "start another audit" bar - the only add-domain form
+                  once a job is loaded; the empty state below has its own. */}
+              <form
+                onSubmit={handleStartCrawl}
+                className="flex flex-col gap-3 rounded-xl border border-slate-800 bg-slate-900/50 p-3 sm:flex-row sm:items-center"
+              >
+                <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-400 sm:shrink-0">
+                  <Sparkles className="h-3.5 w-3.5 text-indigo-400" />
+                  New audit
+                </div>
+                <div className="relative flex-1">
+                  <Globe className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                  <input
+                    type="text"
+                    placeholder="https://example.com"
+                    value={urlInput}
+                    onChange={(e) => setUrlInput(e.target.value)}
+                    disabled={isSubmitting}
+                    className="w-full rounded-lg border border-slate-800 bg-slate-950 py-2 pl-10 pr-3 text-sm text-white placeholder-slate-500 transition focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  className="flex items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-md shadow-indigo-600/25 transition hover:shadow-indigo-500/40 disabled:opacity-50"
+                >
+                  {isSubmitting ? (
+                    <RotateCw className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <>
+                      <Play className="h-4 w-4 fill-current" />
+                      <span>Start Audit</span>
+                    </>
+                  )}
+                </button>
+              </form>
+
               {/* Job summary section */}
               <div className="flex flex-col md:flex-row md:items-center justify-between border-b border-slate-900 pb-6 gap-4">
                 <div className="flex items-center gap-4">
