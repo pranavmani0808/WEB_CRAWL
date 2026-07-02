@@ -1,12 +1,14 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import axios from "axios";
-import { 
+import {
   Play, RotateCw, AlertCircle, Globe, ShieldAlert,
   Clock, Activity, ShieldCheck, Check, Server, Terminal, List, Search,
-  Pause, Trash2, StopCircle, Download
+  Pause, Trash2, StopCircle, Download, LogOut
 } from "lucide-react";
+import { restoreSession, clearSession, AuthUser } from "@/lib/auth";
 
 // Configure base API url
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -75,6 +77,9 @@ interface CrawledUrl {
 }
 
 export default function Dashboard() {
+  const router = useRouter();
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
   const [urlInput, setUrlInput] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isRetryingAll, setIsRetryingAll] = useState(false);
@@ -228,12 +233,42 @@ export default function Dashboard() {
     }
   };
 
+  // Restore session on mount; bounce to /login if there isn't one.
   useEffect(() => {
-    loadJobs();
-  }, []);
+    const restored = restoreSession();
+    if (!restored) {
+      router.replace("/login");
+      return;
+    }
+    setUser(restored);
+    setAuthChecked(true);
+
+    // If the token expires/becomes invalid mid-session, any request will 401 -
+    // catch that globally and send the user back to login.
+    const interceptorId = axios.interceptors.response.use(
+      (res) => res,
+      (err) => {
+        if (err?.response?.status === 401) {
+          clearSession();
+          router.replace("/login");
+        }
+        return Promise.reject(err);
+      }
+    );
+    return () => axios.interceptors.response.eject(interceptorId);
+  }, [router]);
+
+  const handleLogout = () => {
+    clearSession();
+    router.replace("/login");
+  };
 
   useEffect(() => {
-    if (activeJobId) {
+    if (authChecked) loadJobs();
+  }, [authChecked]);
+
+  useEffect(() => {
+    if (activeJobId && authChecked) {
       loadJobDetails(activeJobId);
       // Always poll while a job is active or pending
       const interval = setInterval(() => {
@@ -283,6 +318,14 @@ export default function Dashboard() {
     return matchesSearch;
   });
 
+  if (!authChecked) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-slate-950 text-slate-400">
+        Loading...
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-full min-h-screen flex-col bg-slate-950 text-slate-100 font-sans">
       {/* Header */}
@@ -296,9 +339,24 @@ export default function Dashboard() {
             <p className="text-xs text-slate-400">Sitemap-Based Domain Inventory Auditing</p>
           </div>
         </div>
-        <div className="flex items-center space-x-2">
-          <span className="flex h-2 w-2 rounded-full bg-emerald-500"></span>
-          <span className="text-xs font-medium text-slate-400">Backend Connected</span>
+        <div className="flex items-center space-x-4">
+          <div className="flex items-center space-x-2">
+            <span className="flex h-2 w-2 rounded-full bg-emerald-500"></span>
+            <span className="text-xs font-medium text-slate-400">Backend Connected</span>
+          </div>
+          {user && (
+            <div className="flex items-center space-x-3 border-l border-slate-800 pl-4">
+              <span className="text-xs font-medium text-slate-300">{user.username}</span>
+              <button
+                onClick={handleLogout}
+                className="flex items-center space-x-1 rounded-lg border border-slate-800 px-2 py-1 text-xs text-slate-400 transition hover:border-red-500/30 hover:text-red-400"
+                title="Log out"
+              >
+                <LogOut className="h-3.5 w-3.5" />
+                <span>Log out</span>
+              </button>
+            </div>
+          )}
         </div>
       </header>
 
