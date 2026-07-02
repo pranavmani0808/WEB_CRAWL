@@ -62,6 +62,11 @@ class CrawlerEngine:
         # Cached after first lookup so link discovery doesn't take db_lock and
         # round-trip to Mongo on every single page - see _get_or_create_spider_sitemap.
         self._spider_sitemap_id = None
+        # In-memory mirror of every url_hash already known for this domain, so
+        # _extract_and_queue_links can skip the db_lock + Atlas round-trip
+        # entirely for pages whose links are all already-known (the common
+        # case once the crawl frontier stabilizes). Populated at stage start.
+        self._known_url_hashes: Optional[set] = None
 
     async def log_event(self, level: str, message: str, event_type: str = None, entity_type: str = None, entity_id: str = None, details: dict = None):
         """Log event to python logger and database `crawl_logs` collection"""
@@ -455,6 +460,10 @@ class CrawlerEngine:
             URL.crawl_status == URLCrawlStatus.PENDING.value
         ).to_list(None)
 
+        # One-time seed of the known-hash cache (see __init__) so link discovery
+        # doesn't need a DB round-trip per page for already-known links.
+        self._known_url_hashes = set(u.url_hash for u in urls)
+
         if not urls:
             await self.log_event("warning", "No pending URLs found for crawling.", event_type="no_urls_found")
             return
@@ -545,7 +554,9 @@ class CrawlerEngine:
             if response.history:
                 redirects = [str(r.url) for r in response.history]
             url_obj.redirect_chain = redirects
-            await url_obj.save()
+            # (saved once at the end, together with the SEO/issue fields below -
+            # each url_obj.save() is its own Atlas round-trip, and this one was
+            # entirely redundant with the final save a few lines down.)
 
             # Extract SEO data
             seo_data = None
@@ -565,15 +576,33 @@ class CrawlerEngine:
                 except Exception as e:
                     logger.error(f"Error parsing HTML for {url_obj.url}: {e}")
 
-            for issue in issues:
-                await self.log_event(
-                    level=issue['type'],
-                    message=f"{issue['category']} Issue ({issue['issue']}) on {url_obj.url}: {issue['details']}",
-                    event_type="seo_issue_detected",
-                    entity_type="url",
-                    entity_id=str(url_obj.id),
-                    details=issue
-                )
+            if issues:
+                # One insert_many instead of N sequential log_event() calls -
+                # a page with 5 issues used to mean 5 extra serialized Atlas
+                # round-trips (issues are common: most pages have several).
+                log_entries = []
+                for issue in issues:
+                    message = f"{issue['category']} Issue ({issue['issue']}) on {url_obj.url}: {issue['details']}"
+                    level = issue['type']
+                    if level == "error":
+                        logger.error(f"[Job {self.crawl_job_id}] {message}")
+                    elif level == "warning":
+                        logger.warning(f"[Job {self.crawl_job_id}] {message}")
+                    else:
+                        logger.info(f"[Job {self.crawl_job_id}] {message}")
+                    log_entries.append(CrawlLog(
+                        crawl_job_id=self.crawl_job_id,
+                        level=level,
+                        message=message,
+                        event_type="seo_issue_detected",
+                        entity_type="url",
+                        entity_id=str(url_obj.id),
+                        details=issue
+                    ))
+                try:
+                    await CrawlLog.insert_many(log_entries)
+                except Exception as e:
+                    logger.error(f"Failed to write issue logs to DB: {e}")
 
             # Finalize URL check (second phase commit)
             if seo_data:
@@ -590,12 +619,14 @@ class CrawlerEngine:
             await url_obj.save()
 
             # self.job/self.domain are shared across all concurrent tasks, so the
-            # increment+save is kept under the lock; everything above this is not.
+            # increment is kept under the lock. Persisting to Mongo on every
+            # single page added ~2 Atlas round-trips (hundreds of ms each) to
+            # the lock's critical section, capping the whole crawl's throughput
+            # to roughly 1/that-latency regardless of concurrency - the counter
+            # is flushed periodically instead (see _update_job_progress below).
             async with self.db_lock:
                 self.job.total_urls_checked += 1
                 self.domain.crawled_urls += 1
-                await self.job.save()
-                await self.domain.save()
 
             # Queue discovered internal links
             if soup:
@@ -685,7 +716,11 @@ class CrawlerEngine:
             if elapsed_sec > 0:
                 self.job.crawl_speed_urls_per_sec = round(total_checked / elapsed_sec, 2)
 
+            # self.job.total_urls_checked and self.domain.crawled_urls are kept
+            # up to date in-memory per-page (see _crawl_single_url) and only
+            # flushed to Mongo here, periodically, instead of on every page.
             await self.job.save()
+            await self.domain.save()
 
     async def _stage_reporting(self):
         """Detect duplication, generate issues reports and populate statistics tables"""
@@ -927,27 +962,37 @@ class CrawlerEngine:
                 
         if not new_urls:
             return
-            
+
+        # Hash candidates and drop anything already in the in-memory known-hash
+        # cache first - no lock, no DB round-trip. Once the crawl frontier
+        # stabilizes (after the first page or two), nearly every page's links
+        # are already known, so this skips the Atlas round-trip entirely for
+        # the vast majority of pages instead of paying for it on every single one.
+        candidates = {get_url_hash(url_str): url_str for url_str in new_urls}
+        unknown = {h: u for h, u in candidates.items() if h not in self._known_url_hashes}
+        if not unknown:
+            return
+
         # Get spider sitemap ID
         spider_sitemap_id = await self._get_or_create_spider_sitemap()
-
-        # Hash candidates once outside the lock - this used to run one find_one()
-        # + one insert() per link while holding db_lock (blocking every other
-        # concurrent worker), which for a page with dozens of links serialized
-        # the whole crawl. Batch the existence check into a single query and
-        # bulk-insert the genuinely new ones instead.
-        candidates = {get_url_hash(url_str): url_str for url_str in new_urls}
 
         async with self.db_lock:
             # Recheck limit inside the lock to be safe
             if self.job.total_urls_found >= 10000:
                 return
 
+            # Re-filter against the cache under the lock in case another
+            # concurrent task inserted some of these since the check above.
+            unknown = {h: u for h, u in unknown.items() if h not in self._known_url_hashes}
+            if not unknown:
+                return
+
             existing_docs = await URL.find(
                 URL.domain_id == self.domain.id,
-                {"url_hash": {"$in": list(candidates.keys())}}
+                {"url_hash": {"$in": list(unknown.keys())}}
             ).to_list()
             existing_hashes = {u.url_hash for u in existing_docs}
+            self._known_url_hashes.update(existing_hashes)
 
             remaining_capacity = 10000 - self.job.total_urls_found
             new_docs = [
@@ -960,11 +1005,12 @@ class CrawlerEngine:
                     crawl_status=URLCrawlStatus.PENDING.value,
                     meta_data={}
                 )
-                for url_hash, url_str in candidates.items()
+                for url_hash, url_str in unknown.items()
                 if url_hash not in existing_hashes
             ][:remaining_capacity]
 
             if new_docs:
                 await URL.insert_many(new_docs)
+                self._known_url_hashes.update(d.url_hash for d in new_docs)
                 self.job.total_urls_found += len(new_docs)
                 await self.job.save()
