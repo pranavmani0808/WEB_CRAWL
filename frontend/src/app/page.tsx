@@ -6,10 +6,12 @@ import axios from "axios";
 import {
   Play, RotateCw, Globe,
   Clock, Activity, Check, Server, Terminal, List, Search,
-  Pause, Trash2, StopCircle, Download, LogOut
+  Pause, Trash2, StopCircle, Download, LogOut, Eye
 } from "lucide-react";
 import { restoreSession, clearSession, AuthUser } from "@/lib/auth";
 import Homepage, { PENDING_URL_KEY } from "@/components/Homepage";
+import CrawlingAnimation from "@/components/CrawlingAnimation";
+import PageDetailModal from "@/components/PageDetailModal";
 
 // Configure base API url
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -96,6 +98,7 @@ export default function Dashboard() {
   const [crawledUrls, setCrawledUrls] = useState<CrawledUrl[]>([]);
   const [filterCategory, setFilterCategory] = useState<string>("all");
   const [searchTerm, setSearchTerm] = useState("");
+  const [selectedUrl, setSelectedUrl] = useState<CrawledUrl | null>(null);
 
   // Export audited URLs to CSV
   const downloadCsv = () => {
@@ -576,6 +579,20 @@ export default function Dashboard() {
                 </div>
               </div>
 
+              {/* Live crawling animation - shown while actively fetching pages */}
+              {(jobDetails.status === "running" || jobDetails.status === "pending") && (
+                <CrawlingAnimation
+                  domain={jobDetails.domain}
+                  urlsChecked={jobDetails.progress.total_urls_checked}
+                  urlsFound={jobDetails.progress.total_urls_found}
+                  percent={
+                    Math.max(jobDetails.progress.total_urls_found, jobDetails.progress.total_urls_checked) > 0
+                      ? Math.round((jobDetails.progress.total_urls_checked / Math.max(jobDetails.progress.total_urls_found, jobDetails.progress.total_urls_checked)) * 100)
+                      : 0
+                  }
+                />
+              )}
+
               {/* Interactive Live Pipeline Stepper */}
               <div className="bg-slate-900/30 border border-slate-900/80 p-6 rounded-2xl backdrop-blur-sm space-y-4">
                 <div className="flex items-center justify-between">
@@ -799,6 +816,7 @@ export default function Dashboard() {
                           <th className="px-6 py-3">Status</th>
                           <th className="px-6 py-3">Time</th>
                           <th className="px-6 py-3">Type</th>
+                          <th className="px-6 py-3"></th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-900 text-xs text-slate-300">
@@ -833,12 +851,23 @@ export default function Dashboard() {
                               <td className="px-6 py-3.5 text-slate-400">
                                 {u.content_type || "-"}
                               </td>
+                              <td className="px-6 py-3.5">
+                                {u.crawl_status === "checked" && (
+                                  <button
+                                    onClick={() => setSelectedUrl(u)}
+                                    title="View page content"
+                                    className="flex items-center gap-1 rounded-lg border border-slate-800 px-2 py-1 text-[11px] text-slate-400 transition hover:border-indigo-500/40 hover:text-indigo-400"
+                                  >
+                                    <Eye className="h-3 w-3" /> View
+                                  </button>
+                                )}
+                              </td>
                             </tr>
                           );
                         })}
                         {filteredUrls.length === 0 && (
                           <tr>
-                            <td colSpan={4} className="text-center py-12 text-slate-500">No audited URLs match filters.</td>
+                            <td colSpan={5} className="text-center py-12 text-slate-500">No audited URLs match filters.</td>
                           </tr>
                         )}
                       </tbody>
@@ -860,6 +889,8 @@ export default function Dashboard() {
           )}
         </main>
       </div>
+
+      {selectedUrl && <PageDetailModal page={selectedUrl} onClose={() => setSelectedUrl(null)} />}
     </div>
   );
 }
