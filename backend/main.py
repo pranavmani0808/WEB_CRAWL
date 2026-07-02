@@ -394,7 +394,7 @@ async def delete_crawl_job(job_id: str):
         return JSONResponse(status_code=404, content={"message": "Job not found"})
 
     # Delete associated logs
-    await CrawlLog.delete_many(CrawlLog.crawl_job_id == job_uuid)
+    await CrawlLog.find(CrawlLog.crawl_job_id == job_uuid).delete()
     # Delete the job itself
     await job.delete()
     return {"message": "Job deleted", "job_id": job_id}
