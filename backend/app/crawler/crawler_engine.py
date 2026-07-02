@@ -655,9 +655,9 @@ class CrawlerEngine:
 
         html_results = []
         for url_obj in checked_urls:
-            if url_obj.metadata and isinstance(url_obj.metadata, dict):
+            if url_obj.meta_data and isinstance(url_obj.meta_data, dict):
                 # Ensure the url is present in the dictionary
-                meta = url_obj.metadata.copy()
+                meta = url_obj.meta_data.copy()
                 meta['url'] = url_obj.url
                 meta['status_code'] = url_obj.status_code
                 meta['size'] = url_obj.content_length
