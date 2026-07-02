@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Annotated
 from beanie import Document, Indexed
 from pydantic import Field
 
@@ -11,7 +11,7 @@ class CrawlJob(Document):
     user_id: uuid.UUID
 
     # Job Status
-    status: str = Indexed(default="pending")
+    status: Annotated[str, Indexed()] = "pending"
 
     # Pipeline Stages (for timeline UI)
     stage_domain_validation: bool = False
@@ -50,7 +50,7 @@ class CrawlJob(Document):
     crawl_speed_urls_per_sec: Optional[float] = None
 
     # Timing
-    started_at: datetime = Indexed(default_factory=datetime.utcnow)
+    started_at: Indexed(datetime) = Field(default_factory=datetime.utcnow)
     completed_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
 

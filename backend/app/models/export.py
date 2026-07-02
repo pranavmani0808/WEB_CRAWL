@@ -1,13 +1,13 @@
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Annotated
 from beanie import Document, Indexed
 from pydantic import Field
 
 
 class Export(Document):
     id: uuid.UUID = Field(default_factory=uuid.uuid4)
-    user_id: uuid.UUID = Indexed()
+    user_id: Annotated[uuid.UUID, Indexed()]
     crawl_job_id: Optional[uuid.UUID] = None
 
     # Export Details
@@ -26,7 +26,7 @@ class Export(Document):
     download_count: int = 0
 
     # Timestamps
-    created_at: datetime = Indexed(default_factory=datetime.utcnow)
+    created_at: Indexed(datetime) = Field(default_factory=datetime.utcnow)
     expires_at: Optional[datetime] = None  # For temporary exports
 
     class Settings:
