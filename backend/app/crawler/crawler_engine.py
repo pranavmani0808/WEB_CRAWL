@@ -59,6 +59,9 @@ class CrawlerEngine:
         # just be "checked % 10 == 0" under concurrency.
         self._last_progress_sync = 0
         self._progress_sync_lock = asyncio.Lock()
+        # Cached after first lookup so link discovery doesn't take db_lock and
+        # round-trip to Mongo on every single page - see _get_or_create_spider_sitemap.
+        self._spider_sitemap_id = None
 
     async def log_event(self, level: str, message: str, event_type: str = None, entity_type: str = None, entity_id: str = None, details: dict = None):
         """Log event to python logger and database `crawl_logs` collection"""
@@ -551,7 +554,13 @@ class CrawlerEngine:
             if "text/html" in url_obj.content_type:
                 html_content = response.text
                 try:
-                    seo_data, soup = SEOExtractor.extract_all(html_content, url_obj.url, self.domain.domain, response_time_ms)
+                    # HTML parsing + tag walking is CPU-bound and was running
+                    # inline on the event loop, blocking every other concurrent
+                    # worker for its duration. Off-thread lets requests for the
+                    # other max_workers tasks actually overlap with this.
+                    seo_data, soup = await asyncio.to_thread(
+                        SEOExtractor.extract_all, html_content, url_obj.url, self.domain.domain, response_time_ms
+                    )
                     issues = self.issue_detector.detect_issues(seo_data)
                 except Exception as e:
                     logger.error(f"Error parsing HTML for {url_obj.url}: {e}")
@@ -848,10 +857,21 @@ class CrawlerEngine:
         await self.log_event("info", f"Reporting completed. Health Score: {stats.health_score}", event_type="reporting_completed", details={"health_score": stats.health_score})
 
     async def _get_or_create_spider_sitemap(self) -> uuid.UUID:
-        """Get or create a virtual sitemap entry for HTML link discovery"""
+        """Get or create a virtual sitemap entry for HTML link discovery.
+
+        Cached on the instance after the first call - this used to hit Mongo
+        (under db_lock, serializing every other concurrent worker) on every
+        single crawled page, which was a major source of the crawl slowness.
+        """
+        if self._spider_sitemap_id is not None:
+            return self._spider_sitemap_id
+
         spider_url = f"https://{self.domain.domain}/html-spider"
 
         async with self.db_lock:
+            if self._spider_sitemap_id is not None:
+                return self._spider_sitemap_id
+
             spider_sitemap = await Sitemap.find_one(
                 Sitemap.domain_id == self.domain.id,
                 Sitemap.sitemap_url == spider_url
@@ -869,7 +889,8 @@ class CrawlerEngine:
                 )
                 await spider_sitemap.insert()
 
-            return spider_sitemap.id
+            self._spider_sitemap_id = spider_sitemap.id
+            return self._spider_sitemap_id
 
     async def _extract_and_queue_links(self, soup, current_url: str):
         """Extract all internal links from soup and queue them as pending if not already existing"""
@@ -909,32 +930,41 @@ class CrawlerEngine:
             
         # Get spider sitemap ID
         spider_sitemap_id = await self._get_or_create_spider_sitemap()
-        
-        # Deduplicate and check database
+
+        # Hash candidates once outside the lock - this used to run one find_one()
+        # + one insert() per link while holding db_lock (blocking every other
+        # concurrent worker), which for a page with dozens of links serialized
+        # the whole crawl. Batch the existence check into a single query and
+        # bulk-insert the genuinely new ones instead.
+        candidates = {get_url_hash(url_str): url_str for url_str in new_urls}
+
         async with self.db_lock:
             # Recheck limit inside the lock to be safe
             if self.job.total_urls_found >= 10000:
                 return
 
-            for url_str in set(new_urls):
-                url_clean_hash = get_url_hash(url_str)
-                existing_url = await URL.find_one(
-                    URL.domain_id == self.domain.id,
-                    URL.url_hash == url_clean_hash
-                )
-                if not existing_url:
-                    new_url_obj = URL(
-                        id=uuid.uuid4(),
-                        domain_id=self.domain.id,
-                        sitemap_id=spider_sitemap_id,
-                        url=url_str,
-                        url_hash=url_clean_hash,
-                        crawl_status=URLCrawlStatus.PENDING.value,
-                        meta_data={}
-                    )
-                    await new_url_obj.insert()
-                    self.job.total_urls_found += 1
+            existing_docs = await URL.find(
+                URL.domain_id == self.domain.id,
+                {"url_hash": {"$in": list(candidates.keys())}}
+            ).to_list()
+            existing_hashes = {u.url_hash for u in existing_docs}
 
-                    if self.job.total_urls_found >= 10000:
-                        break
-            await self.job.save()
+            remaining_capacity = 10000 - self.job.total_urls_found
+            new_docs = [
+                URL(
+                    id=uuid.uuid4(),
+                    domain_id=self.domain.id,
+                    sitemap_id=spider_sitemap_id,
+                    url=url_str,
+                    url_hash=url_hash,
+                    crawl_status=URLCrawlStatus.PENDING.value,
+                    meta_data={}
+                )
+                for url_hash, url_str in candidates.items()
+                if url_hash not in existing_hashes
+            ][:remaining_capacity]
+
+            if new_docs:
+                await URL.insert_many(new_docs)
+                self.job.total_urls_found += len(new_docs)
+                await self.job.save()

@@ -11,7 +11,9 @@ class SEOExtractor:
     @staticmethod
     def extract_all(html_content, url, base_domain, response_time=0.0):
         """Helper to run all extractions and return a consolidated dict"""
-        soup = BeautifulSoup(html_content, 'html.parser')
+        # lxml's C parser is 5-10x faster than the stdlib html.parser, which
+        # matters a lot here since this runs synchronously per crawled page.
+        soup = BeautifulSoup(html_content, 'lxml')
         result = SEOExtractor.create_empty_result(url, 0)
         result['response_time'] = response_time
         
