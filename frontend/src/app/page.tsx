@@ -682,7 +682,7 @@ export default function Dashboard() {
                   <div>
                     <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400">Crawl Progress</h3>
                     <div className="text-3xl font-extrabold text-white mt-2">
-                      {jobDetails.progress.total_urls_checked} <span className="text-lg text-slate-500 font-normal">/ {Math.max(jobDetails.progress.total_urls_found, jobDetails.progress.total_urls_checked, crawledUrls.length)} URLs</span>
+                      {jobDetails.progress.total_urls_checked} <span className="text-lg text-slate-500 font-normal">/ {Math.max(jobDetails.progress.total_urls_found, jobDetails.progress.total_urls_checked)} URLs</span>
                     </div>
                   </div>
                   <div className="mt-4">
@@ -691,8 +691,8 @@ export default function Dashboard() {
                         className="bg-indigo-500 h-full rounded-full transition-all duration-300"
                         style={{
                           width: `${
-                            Math.max(jobDetails.progress.total_urls_found, jobDetails.progress.total_urls_checked, crawledUrls.length) > 0
-                              ? (jobDetails.progress.total_urls_checked / Math.max(jobDetails.progress.total_urls_found, jobDetails.progress.total_urls_checked, crawledUrls.length)) * 100
+                            Math.max(jobDetails.progress.total_urls_found, jobDetails.progress.total_urls_checked) > 0
+                              ? (jobDetails.progress.total_urls_checked / Math.max(jobDetails.progress.total_urls_found, jobDetails.progress.total_urls_checked)) * 100
                               : 0
                           }%`,
                         }}
@@ -700,7 +700,7 @@ export default function Dashboard() {
                     </div>
                     <div className="flex justify-between text-xs text-slate-500 mt-2">
                       <span>Sitemaps Found: {jobDetails.progress.total_urls_found}</span>
-                      <span>{Math.max(jobDetails.progress.total_urls_found, jobDetails.progress.total_urls_checked, crawledUrls.length) > 0 ? Math.round((jobDetails.progress.total_urls_checked / Math.max(jobDetails.progress.total_urls_found, jobDetails.progress.total_urls_checked, crawledUrls.length)) * 100) : 0}%</span>
+                      <span>{Math.max(jobDetails.progress.total_urls_found, jobDetails.progress.total_urls_checked) > 0 ? Math.round((jobDetails.progress.total_urls_checked / Math.max(jobDetails.progress.total_urls_found, jobDetails.progress.total_urls_checked)) * 100) : 0}%</span>
                     </div>
                   </div>
                 </div>
