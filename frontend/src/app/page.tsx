@@ -441,13 +441,17 @@ export default function Dashboard() {
                   <div className="flex items-center justify-between">
                     <span className="font-semibold text-sm truncate max-w-[110px]">{j.domain}</span>
                     <div className="flex items-center gap-1">
-                      {/* Retry button for pending/failed */}
-                      {(j.status === "pending" || j.status === "failed") && (
+                      {/* Retry button for pending/failed, and for running - a job can get
+                          orphaned (stuck at "running" forever) if the backend worker
+                          restarts mid-crawl, and this is the only way to recover it. */}
+                      {(j.status === "pending" || j.status === "failed" || j.status === "running") && (
                         <button
                           onClick={(e) => retryJob(j.id, e)}
                           disabled={retryingJobId === j.id}
                           title="Re-dispatch this job"
-                          className="text-slate-500 hover:text-indigo-400 transition disabled:opacity-40 p-0.5 rounded"
+                          className={`text-slate-500 hover:text-indigo-400 transition disabled:opacity-40 p-0.5 rounded ${
+                            j.status === "running" ? "opacity-0 group-hover:opacity-100" : ""
+                          }`}
                         >
                           <RotateCw className={`h-3 w-3 ${retryingJobId === j.id ? "animate-spin" : ""}`} />
                         </button>
