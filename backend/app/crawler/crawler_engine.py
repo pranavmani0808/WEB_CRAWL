@@ -54,6 +54,11 @@ class CrawlerEngine:
         self.rate_limiter = None
         self.issue_detector = None
         self.db_lock = asyncio.Lock()
+        # Tracks the last total_urls_checked value we synced stats at, and
+        # guards the sync itself - see _crawl_single_url for why this can't
+        # just be "checked % 10 == 0" under concurrency.
+        self._last_progress_sync = 0
+        self._progress_sync_lock = asyncio.Lock()
 
     async def log_event(self, level: str, message: str, event_type: str = None, entity_type: str = None, entity_id: str = None, details: dict = None):
         """Log event to python logger and database `crawl_logs` collection"""
@@ -608,8 +613,18 @@ class CrawlerEngine:
             await url_obj.save()
             await self.log_event("error", f"Crawl failed for {url_obj.url}: {str(e)}", event_type="crawl_url_failed", entity_type="url", entity_id=str(url_obj.id))
 
-        # Periodic updates to the UI / stats (e.g. every 10 checked URLs)
-        if self.job.total_urls_checked % 10 == 0:
+        # Periodic updates to the UI / stats (roughly every 10 checked URLs).
+        # Using "checked % 10 == 0" is unreliable under concurrency: with up to
+        # max_workers tasks incrementing the same shared counter, the exact
+        # multiple-of-10 value can get skipped entirely (another task already
+        # bumped the count past it by the time this task reads it), so the
+        # sync silently never fires until the crawl fully completes. Track
+        # the last synced count instead and trigger on "at least 10 since".
+        async with self._progress_sync_lock:
+            should_sync = self.job.total_urls_checked - self._last_progress_sync >= 10
+            if should_sync:
+                self._last_progress_sync = self.job.total_urls_checked
+        if should_sync:
             await self._update_job_progress()
 
     async def _update_job_progress(self):
