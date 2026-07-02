@@ -346,8 +346,14 @@ async def list_job_urls(job_id: str, current_user: User = Depends(get_current_us
     if not job or job.user_id != current_user.id:
         return JSONResponse(status_code=404, content={"message": "Job not found"})
 
-    # Fetch URLs for this domain
-    urls = await URL.find(URL.domain_id == job.domain_id).sort("url").to_list(None)
+    # URLs are stored per-domain (reused/updated across crawl runs, not
+    # per-job), so a plain domain_id filter would surface stale results from
+    # a previous crawl of the same domain before this job has touched them.
+    # Restrict to URLs this job's own run has actually created/updated.
+    urls = await URL.find(
+        URL.domain_id == job.domain_id,
+        URL.updated_at >= job.started_at,
+    ).sort("url").to_list(None)
 
     return [{
         "id": str(u.id),

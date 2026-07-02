@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, date
 from typing import Optional, List
-from beanie import Document
+from beanie import Document, Save, before_event
 from pydantic import Field
 from pymongo import IndexModel, ASCENDING
 
@@ -57,6 +57,13 @@ class URL(Document):
 
     # SEO/accessibility/technical issues detected during crawl (see IssueDetector)
     seo_issues: List[dict] = []
+
+    @before_event(Save)
+    def _touch_updated_at(self):
+        # Lets callers (e.g. GET /api/crawl/jobs/{id}/urls) filter to URLs
+        # actually touched by a given job's run, instead of every URL ever
+        # seen for the domain across past crawls.
+        self.updated_at = datetime.utcnow()
 
     class Settings:
         name = "urls"
