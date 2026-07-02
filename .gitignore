@@ -16,6 +16,9 @@ eggs/
 .eggs/
 lib/
 lib64/
+# The lib/ rule above is meant for Python venvs, but its unanchored pattern
+# also matches frontend/src/lib - un-ignore that one explicitly.
+!frontend/src/lib/
 parts/
 sdist/
 var/
