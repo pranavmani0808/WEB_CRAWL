@@ -1,8 +1,9 @@
 import uuid
 from datetime import datetime
 from typing import Optional
-from beanie import Document, Indexed
+from beanie import Document
 from pydantic import Field
+from pymongo import IndexModel, ASCENDING
 
 
 class Subdomain(Document):
@@ -10,11 +11,11 @@ class Subdomain(Document):
     domain_id: uuid.UUID
 
     # Subdomain Info
-    subdomain: str = Indexed()
-    normalized_url: str = Indexed(unique=True)
+    subdomain: str
+    normalized_url: str
 
     # Status
-    status: str = Indexed(default="pending")
+    status: str = "pending"
 
     # Counts
     total_sitemaps: int = 0
@@ -31,3 +32,8 @@ class Subdomain(Document):
 
     class Settings:
         name = "subdomains"
+        indexes = [
+            IndexModel([("normalized_url", ASCENDING)], unique=True),
+            IndexModel([("subdomain", ASCENDING)]),
+            IndexModel([("status", ASCENDING)]),
+        ]

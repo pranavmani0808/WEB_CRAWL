@@ -1,13 +1,14 @@
 import uuid
 from datetime import datetime
 from typing import Optional
-from beanie import Document, Indexed
+from beanie import Document
 from pydantic import Field
+from pymongo import IndexModel, ASCENDING
 
 
 class CrawlStatistics(Document):
     id: uuid.UUID = Field(default_factory=uuid.uuid4)
-    domain_id: uuid.UUID = Indexed(unique=True)
+    domain_id: uuid.UUID
     crawl_job_id: Optional[uuid.UUID] = None
 
     # Counts
@@ -29,7 +30,7 @@ class CrawlStatistics(Document):
     p99_response_time_ms: Optional[int] = None
 
     # Health
-    health_score: Optional[int] = Indexed(default=None)
+    health_score: Optional[int] = None
     broken_links_count: int = 0
     redirect_chains_count: int = 0
 
@@ -53,3 +54,6 @@ class CrawlStatistics(Document):
 
     class Settings:
         name = "crawl_statistics"
+        indexes = [
+            IndexModel([("domain_id", ASCENDING)], unique=True),
+        ]

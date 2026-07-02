@@ -1,13 +1,13 @@
 import uuid
 from datetime import datetime
 from typing import Optional
-from beanie import Document, Indexed
+from beanie import Document
 from pydantic import Field
 
 
 class CrawlComparison(Document):
     id: uuid.UUID = Field(default_factory=uuid.uuid4)
-    domain_id: uuid.UUID = Indexed()
+    domain_id: uuid.UUID
 
     # Crawls being compared
     previous_crawl_job_id: Optional[uuid.UUID] = None

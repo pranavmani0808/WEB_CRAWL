@@ -1,14 +1,15 @@
 import uuid
 from datetime import datetime
 from typing import Optional, List
-from beanie import Document, Indexed, BackLink
+from beanie import Document, BackLink
 from pydantic import Field
+from pymongo import IndexModel, ASCENDING
 
 
 class User(Document):
     id: uuid.UUID = Field(default_factory=uuid.uuid4)
-    email: str = Indexed(unique=True)
-    username: str = Indexed(unique=True)
+    email: str
+    username: str
     password_hash: str
     is_active: bool = True
     is_admin: bool = False
@@ -17,3 +18,7 @@ class User(Document):
 
     class Settings:
         name = "users"
+        indexes = [
+            IndexModel([("email", ASCENDING)], unique=True),
+            IndexModel([("username", ASCENDING)], unique=True),
+        ]

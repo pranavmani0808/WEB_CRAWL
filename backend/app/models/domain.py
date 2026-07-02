@@ -1,8 +1,9 @@
 import uuid
 from datetime import datetime
 from typing import Optional, List
-from beanie import Document, Indexed
+from beanie import Document
 from pydantic import Field
+from pymongo import IndexModel, ASCENDING
 
 
 class Domain(Document):
@@ -11,8 +12,8 @@ class Domain(Document):
 
     # Input & Normalization
     original_url: str
-    normalized_url: str = Indexed(unique=True)
-    domain: str = Indexed()
+    normalized_url: str
+    domain: str
 
     # Domain Info
     ip_address: Optional[str] = None
@@ -27,7 +28,7 @@ class Domain(Document):
     robots_disallow: bool = False
 
     # Status
-    status: str = Indexed(default="pending")
+    status: str = "pending"
 
     # Counts
     total_subdomains: int = 0
@@ -37,7 +38,7 @@ class Domain(Document):
 
     # Timestamps
     first_crawl_at: Optional[datetime] = None
-    last_crawl_at: Optional[datetime] = Indexed(default=None)
+    last_crawl_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -48,3 +49,9 @@ class Domain(Document):
 
     class Settings:
         name = "domains"
+        indexes = [
+            IndexModel([("normalized_url", ASCENDING)], unique=True),
+            IndexModel([("domain", ASCENDING)]),
+            IndexModel([("status", ASCENDING)]),
+            IndexModel([("last_crawl_at", ASCENDING)]),
+        ]

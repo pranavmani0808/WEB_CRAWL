@@ -1,8 +1,9 @@
 import uuid
 from datetime import datetime, date
 from typing import Optional
-from beanie import Document, Indexed
+from beanie import Document
 from pydantic import Field
+from pymongo import IndexModel, ASCENDING
 
 
 class Sitemap(Document):
@@ -11,17 +12,17 @@ class Sitemap(Document):
     subdomain_id: Optional[uuid.UUID] = None
 
     # Sitemap Details
-    sitemap_url: str = Indexed(unique=True)
+    sitemap_url: str
 
     # Type & Hierarchy
-    is_index: bool = Indexed(default=False)
+    is_index: bool = False
     parent_sitemap_id: Optional[uuid.UUID] = None
 
     # Discovery Source
     discovered_from: Optional[str] = None
 
     # Status
-    status: str = Indexed(default="pending")
+    status: str = "pending"
 
     # Content
     url_count: int = 0
@@ -46,3 +47,7 @@ class Sitemap(Document):
 
     class Settings:
         name = "sitemaps"
+        indexes = [
+            IndexModel([("sitemap_url", ASCENDING)], unique=True),
+            IndexModel([("status", ASCENDING)]),
+        ]

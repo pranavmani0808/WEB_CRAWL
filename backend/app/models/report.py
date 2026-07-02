@@ -1,17 +1,17 @@
 import uuid
 from datetime import datetime
 from typing import Optional
-from beanie import Document, Indexed
+from beanie import Document
 from pydantic import Field
 
 
 class Report(Document):
     id: uuid.UUID = Field(default_factory=uuid.uuid4)
-    domain_id: uuid.UUID = Indexed()
+    domain_id: uuid.UUID
     crawl_job_id: Optional[uuid.UUID] = None
 
     # Report Type
-    report_type: str = Indexed()  # broken_pages, redirect_chains, etc.
+    report_type: str  # broken_pages, redirect_chains, etc.
 
     # Content
     title: str

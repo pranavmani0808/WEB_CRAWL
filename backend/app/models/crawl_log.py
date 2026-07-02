@@ -1,20 +1,20 @@
 import uuid
 from datetime import datetime
-from typing import Optional, Annotated
-from beanie import Document, Indexed
+from typing import Optional
+from beanie import Document
 from pydantic import Field
 
 
 class CrawlLog(Document):
-    crawl_job_id: Annotated[uuid.UUID, Indexed()]
+    crawl_job_id: uuid.UUID
 
     # Log Entry
-    timestamp: Indexed(datetime) = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
     level: str  # info, warning, error
     message: str
 
     # Context
-    event_type: Annotated[Optional[str], Indexed()] = None  # robots_found, sitemap_discovered, etc.
+    event_type: Optional[str] = None  # robots_found, sitemap_discovered, etc.
     entity_type: Optional[str] = None  # url, sitemap, domain, worker
     entity_id: Optional[str] = None
 

@@ -1,13 +1,12 @@
 import uuid
 from datetime import datetime
-from typing import Annotated
-from beanie import Document, Indexed
+from beanie import Document
 from pydantic import Field
 
 
 class CrawlHistory(Document):
     id: uuid.UUID = Field(default_factory=uuid.uuid4)
-    domain_id: Annotated[uuid.UUID, Indexed()]
+    domain_id: uuid.UUID
     crawl_job_id: uuid.UUID
 
     # Metrics snapshot
@@ -19,7 +18,7 @@ class CrawlHistory(Document):
     health_score: int = 0
 
     # Timing
-    crawled_at: Indexed(datetime) = Field(default_factory=datetime.utcnow)
+    crawled_at: datetime = Field(default_factory=datetime.utcnow)
 
     class Settings:
         name = "crawl_history"

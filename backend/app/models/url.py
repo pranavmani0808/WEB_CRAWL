@@ -1,8 +1,9 @@
 import uuid
 from datetime import datetime, date
 from typing import Optional, List
-from beanie import Document, Indexed
+from beanie import Document
 from pydantic import Field
+from pymongo import IndexModel, ASCENDING
 
 
 class URL(Document):
@@ -13,7 +14,7 @@ class URL(Document):
 
     # URL Info
     url: str
-    url_hash: str = Indexed(unique=True)
+    url_hash: str
 
     # Sitemap Data
     sitemap_last_modified: Optional[date] = None
@@ -21,15 +22,15 @@ class URL(Document):
     sitemap_priority: Optional[float] = None
 
     # HTTP Status
-    status_code: Optional[int] = Indexed(default=None)
-    status_category: Optional[str] = Indexed(default=None)
+    status_code: Optional[int] = None
+    status_category: Optional[str] = None
 
     # Redirect Tracking
     final_url: Optional[str] = None
     redirect_chain: List[str] = []
 
     # Response Details
-    response_time_ms: Optional[int] = Indexed(default=None)
+    response_time_ms: Optional[int] = None
     content_type: Optional[str] = None
     content_length: Optional[int] = None
 
@@ -39,12 +40,12 @@ class URL(Document):
     is_indexable: Optional[bool] = None
 
     # Crawl Status
-    crawl_status: str = Indexed(default="pending")
+    crawl_status: str = "pending"
     crawl_attempt: int = 0
 
     # Timestamps
     discovered_at: datetime = Field(default_factory=datetime.utcnow)
-    last_checked_at: Optional[datetime] = Indexed(default=None)
+    last_checked_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -56,3 +57,12 @@ class URL(Document):
 
     class Settings:
         name = "urls"
+        indexes = [
+            IndexModel([("url_hash", ASCENDING)], unique=True),
+            IndexModel([("domain_id", ASCENDING)]),
+            IndexModel([("status_code", ASCENDING)]),
+            IndexModel([("status_category", ASCENDING)]),
+            IndexModel([("response_time_ms", ASCENDING)]),
+            IndexModel([("crawl_status", ASCENDING)]),
+            IndexModel([("last_checked_at", ASCENDING)]),
+        ]
