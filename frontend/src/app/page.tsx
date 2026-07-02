@@ -6,7 +6,7 @@ import axios from "axios";
 import {
   Play, RotateCw, Globe,
   Clock, Activity, Check, Server, Terminal, List, Search,
-  Download, LogOut, Eye
+  Download, LogOut, Eye, Gauge, BarChart3, Sparkles
 } from "lucide-react";
 import { restoreSession, clearSession, AuthUser } from "@/lib/auth";
 import Homepage, { PENDING_URL_KEY } from "@/components/Homepage";
@@ -274,9 +274,10 @@ export default function Dashboard() {
   return (
     <div className="flex h-full min-h-screen flex-col bg-slate-950 text-slate-100 font-sans">
       {/* Header */}
-      <header className="flex items-center justify-between border-b border-slate-900 bg-slate-900/50 px-6 py-4 backdrop-blur">
+      <header className="relative flex items-center justify-between border-b border-slate-900 bg-slate-900/40 px-6 py-4 backdrop-blur-xl">
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-indigo-500/40 to-transparent" />
         <div className="flex items-center space-x-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 shadow-lg shadow-indigo-500/20">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 shadow-lg shadow-indigo-500/25">
             <Globe className="h-5 w-5 text-white" />
           </div>
           <div>
@@ -285,13 +286,21 @@ export default function Dashboard() {
           </div>
         </div>
         <div className="flex items-center space-x-4">
-          <div className="flex items-center space-x-2">
-            <span className="flex h-2 w-2 rounded-full bg-emerald-500"></span>
-            <span className="text-xs font-medium text-slate-400">Backend Connected</span>
+          <div className="flex items-center space-x-2 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1">
+            <span className="relative flex h-2 w-2">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500"></span>
+            </span>
+            <span className="text-xs font-medium text-emerald-400">Backend Connected</span>
           </div>
           {user && (
             <div className="flex items-center space-x-3 border-l border-slate-800 pl-4">
-              <span className="text-xs font-medium text-slate-300">{user.username}</span>
+              <div className="flex items-center gap-2">
+                <div className="flex h-6 w-6 items-center justify-center rounded-full bg-gradient-to-tr from-indigo-500 to-blue-500 text-[10px] font-bold text-white">
+                  {user.username?.[0]?.toUpperCase()}
+                </div>
+                <span className="text-xs font-medium text-slate-300">{user.username}</span>
+              </div>
               <button
                 onClick={handleLogout}
                 className="flex items-center space-x-1 rounded-lg border border-slate-800 px-2 py-1 text-xs text-slate-400 transition hover:border-red-500/30 hover:text-red-400"
@@ -310,12 +319,18 @@ export default function Dashboard() {
         {/* Sidebar: Crawl Jobs List */}
         <aside className="w-80 border-r border-slate-900 bg-slate-900/20 p-6 flex flex-col space-y-6 overflow-y-auto">
           {/* Crawl Trigger Form */}
-          <div className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5 space-y-4">
-            <div>
-              <h2 className="text-lg font-bold text-white">Add your domain</h2>
-              <p className="mt-1 text-xs text-slate-400">Enter a domain address to get started.</p>
+          <div className="relative overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/50 p-5 space-y-4">
+            <div className="pointer-events-none absolute -right-8 -top-8 h-28 w-28 rounded-full bg-indigo-500/10 blur-2xl" />
+            <div className="relative flex items-center gap-3">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-indigo-500/20 bg-indigo-500/10 text-indigo-400">
+                <Sparkles className="h-4 w-4" />
+              </div>
+              <div>
+                <h2 className="text-base font-bold text-white">Add your domain</h2>
+                <p className="mt-0.5 text-xs text-slate-400">Enter a domain address to get started.</p>
+              </div>
             </div>
-            <form onSubmit={handleStartCrawl} className="space-y-3">
+            <form onSubmit={handleStartCrawl} className="relative space-y-3">
               <div className="relative">
                 <Globe className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
                 <input
@@ -324,13 +339,13 @@ export default function Dashboard() {
                   value={urlInput}
                   onChange={(e) => setUrlInput(e.target.value)}
                   disabled={isSubmitting}
-                  className="w-full rounded-xl border border-slate-800 bg-slate-950 py-3 pl-10 pr-3 text-sm text-white placeholder-slate-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  className="w-full rounded-xl border border-slate-800 bg-slate-950 py-3 pl-10 pr-3 text-sm text-white placeholder-slate-500 transition focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                 />
               </div>
               <button
                 type="submit"
                 disabled={isSubmitting}
-                className="flex w-full items-center justify-center space-x-2 rounded-xl bg-indigo-600 px-4 py-3 text-sm font-semibold text-white shadow-md shadow-indigo-600/20 transition hover:bg-indigo-500 focus:outline-none disabled:opacity-50"
+                className="flex w-full items-center justify-center space-x-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-indigo-600/25 transition hover:shadow-indigo-500/40 focus:outline-none disabled:opacity-50"
               >
                 {isSubmitting ? (
                   <RotateCw className="h-4 w-4 animate-spin" />
@@ -348,7 +363,7 @@ export default function Dashboard() {
 
           {/* Retry-all banner for stuck jobs */}
           {hasPendingJobs && (
-            <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2.5 flex items-center justify-between">
+            <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 px-3 py-2.5 flex items-center justify-between">
               <div className="text-xs text-amber-400">
                 <span className="font-semibold">Jobs stuck?</span> Re-queue all
               </div>
@@ -375,18 +390,25 @@ export default function Dashboard() {
             <>
               {/* Job summary section */}
               <div className="flex flex-col md:flex-row md:items-center justify-between border-b border-slate-900 pb-6 gap-4">
-                <div>
-                  <div className="flex items-center space-x-3">
-                    <h2 className="text-2xl font-bold text-white tracking-tight">{jobDetails.domain}</h2>
-                    <span className={`text-xs px-2.5 py-0.5 rounded-full border ${getStatusColor(jobDetails.status)}`}>
-                      {jobDetails.status}
-                    </span>
+                <div className="flex items-center gap-4">
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-slate-800 bg-gradient-to-tr from-slate-900 to-slate-800 text-indigo-400 shadow-lg shadow-black/20">
+                    <Globe className="h-5 w-5" />
                   </div>
-                  <p className="text-sm text-slate-400 mt-1">Audit URL: <a href={jobDetails.url} target="_blank" rel="noreferrer" className="text-indigo-400 hover:underline">{jobDetails.url}</a></p>
+                  <div>
+                    <div className="flex items-center space-x-3">
+                      <h2 className="text-2xl font-bold text-white tracking-tight">{jobDetails.domain}</h2>
+                      <span className={`text-xs px-2.5 py-0.5 rounded-full border ${getStatusColor(jobDetails.status)}`}>
+                        {jobDetails.status}
+                      </span>
+                    </div>
+                    <p className="text-sm text-slate-400 mt-1">Audit URL: <a href={jobDetails.url} target="_blank" rel="noreferrer" className="text-indigo-400 hover:underline">{jobDetails.url}</a></p>
+                  </div>
                 </div>
                 <div className="flex items-center gap-3">
-                  <div className="bg-slate-900 border border-slate-800 p-3 rounded-xl flex items-center gap-3">
-                    <Clock className="h-5 w-5 text-indigo-400" />
+                  <div className="bg-slate-900/60 border border-slate-800 p-3 rounded-xl flex items-center gap-3">
+                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-500/10 text-indigo-400">
+                      <Clock className="h-4 w-4" />
+                    </div>
                     <div>
                       <div className="text-xs text-slate-400">Duration</div>
                       <div className="text-sm font-semibold text-white">
@@ -398,8 +420,10 @@ export default function Dashboard() {
                       </div>
                     </div>
                   </div>
-                  <div className="bg-slate-900 border border-slate-800 p-3 rounded-xl flex items-center gap-3">
-                    <Activity className="h-5 w-5 text-indigo-400" />
+                  <div className="bg-slate-900/60 border border-slate-800 p-3 rounded-xl flex items-center gap-3">
+                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-500/10 text-indigo-400">
+                      <Gauge className="h-4 w-4" />
+                    </div>
                     <div>
                       <div className="text-xs text-slate-400">Speed</div>
                       <div className="text-sm font-semibold text-white">
@@ -425,7 +449,8 @@ export default function Dashboard() {
               )}
 
               {/* Interactive Live Pipeline Stepper */}
-              <div className="bg-slate-900/30 border border-slate-900/80 p-6 rounded-2xl backdrop-blur-sm space-y-4">
+              <div className="relative overflow-hidden bg-slate-900/30 border border-slate-900/80 p-6 rounded-2xl backdrop-blur-sm space-y-4">
+                <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-indigo-500/50 to-transparent" />
                 <div className="flex items-center justify-between">
                   <div className="flex items-center space-x-2">
                     <Activity className="h-4 w-4 text-indigo-400 animate-pulse" />
@@ -520,17 +545,23 @@ export default function Dashboard() {
               {jobDetails.status === "completed" && (
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 {/* Progress Card */}
-                <div className="bg-slate-900/50 border border-slate-900 p-6 rounded-2xl flex flex-col justify-between">
+                <div className="relative overflow-hidden bg-slate-900/50 border border-slate-900 p-6 rounded-2xl flex flex-col justify-between">
+                  <div className="pointer-events-none absolute inset-x-0 top-0 h-0.5 bg-gradient-to-r from-indigo-500 to-blue-500" />
                   <div>
-                    <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400">Crawl Progress</h3>
-                    <div className="text-3xl font-extrabold text-white mt-2">
+                    <div className="flex items-center gap-2">
+                      <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-indigo-500/10 text-indigo-400">
+                        <Activity className="h-3.5 w-3.5" />
+                      </div>
+                      <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400">Crawl Progress</h3>
+                    </div>
+                    <div className="text-3xl font-extrabold text-white mt-3">
                       {jobDetails.progress.total_urls_checked} <span className="text-lg text-slate-500 font-normal">/ {Math.max(jobDetails.progress.total_urls_found, jobDetails.progress.total_urls_checked)} URLs</span>
                     </div>
                   </div>
                   <div className="mt-4">
-                    <div className="w-full bg-slate-850 h-2 rounded-full overflow-hidden">
+                    <div className="w-full bg-slate-800/80 h-2 rounded-full overflow-hidden">
                       <div
-                        className="bg-indigo-500 h-full rounded-full transition-all duration-300"
+                        className="bg-gradient-to-r from-indigo-500 to-blue-500 h-full rounded-full transition-all duration-300"
                         style={{
                           width: `${
                             Math.max(jobDetails.progress.total_urls_found, jobDetails.progress.total_urls_checked) > 0
@@ -548,23 +579,41 @@ export default function Dashboard() {
                 </div>
 
                 {/* Response Code breakdowns */}
-                <div className="bg-slate-900/50 border border-slate-900 p-6 rounded-2xl md:col-span-2">
-                  <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400">Response Status Distribution</h3>
+                <div className="relative overflow-hidden bg-slate-900/50 border border-slate-900 p-6 rounded-2xl md:col-span-2">
+                  <div className="pointer-events-none absolute inset-x-0 top-0 h-0.5 bg-gradient-to-r from-emerald-500 via-amber-500 to-red-500" />
+                  <div className="flex items-center gap-2">
+                    <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-indigo-500/10 text-indigo-400">
+                      <BarChart3 className="h-3.5 w-3.5" />
+                    </div>
+                    <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400">Response Status Distribution</h3>
+                  </div>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-4">
-                    <div className="bg-slate-950 p-3 rounded-xl border border-slate-900">
-                      <div className="text-emerald-400 text-xl font-bold">{jobDetails.progress.urls_2xx}</div>
+                    <div className="bg-slate-950 p-3 rounded-xl border border-slate-900 transition hover:border-emerald-500/30">
+                      <div className="flex items-center gap-1.5 text-emerald-400 text-xl font-bold">
+                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                        {jobDetails.progress.urls_2xx}
+                      </div>
                       <div className="text-xs text-slate-400 mt-1">2xx Success</div>
                     </div>
-                    <div className="bg-slate-950 p-3 rounded-xl border border-slate-900">
-                      <div className="text-blue-400 text-xl font-bold">{jobDetails.progress.urls_3xx}</div>
+                    <div className="bg-slate-950 p-3 rounded-xl border border-slate-900 transition hover:border-blue-500/30">
+                      <div className="flex items-center gap-1.5 text-blue-400 text-xl font-bold">
+                        <span className="h-1.5 w-1.5 rounded-full bg-blue-400" />
+                        {jobDetails.progress.urls_3xx}
+                      </div>
                       <div className="text-xs text-slate-400 mt-1">3xx Redirects</div>
                     </div>
-                    <div className="bg-slate-950 p-3 rounded-xl border border-slate-900">
-                      <div className="text-amber-400 text-xl font-bold">{jobDetails.progress.urls_4xx}</div>
+                    <div className="bg-slate-950 p-3 rounded-xl border border-slate-900 transition hover:border-amber-500/30">
+                      <div className="flex items-center gap-1.5 text-amber-400 text-xl font-bold">
+                        <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
+                        {jobDetails.progress.urls_4xx}
+                      </div>
                       <div className="text-xs text-slate-400 mt-1">4xx Client Errors</div>
                     </div>
-                    <div className="bg-slate-950 p-3 rounded-xl border border-slate-900">
-                      <div className="text-red-400 text-xl font-bold">{jobDetails.progress.urls_5xx + jobDetails.progress.urls_timeout + jobDetails.progress.urls_dns_error}</div>
+                    <div className="bg-slate-950 p-3 rounded-xl border border-slate-900 transition hover:border-red-500/30">
+                      <div className="flex items-center gap-1.5 text-red-400 text-xl font-bold">
+                        <span className="h-1.5 w-1.5 rounded-full bg-red-400" />
+                        {jobDetails.progress.urls_5xx + jobDetails.progress.urls_timeout + jobDetails.progress.urls_dns_error}
+                      </div>
                       <div className="text-xs text-slate-400 mt-1">Failed/Broken</div>
                     </div>
                   </div>
@@ -577,17 +626,22 @@ export default function Dashboard() {
                   whole time and just takes the full row until then. */}
               <div className={`grid grid-cols-1 ${jobDetails.status === "completed" ? "lg:grid-cols-3" : ""} gap-8`}>
                 {/* Real-time Activity Terminal */}
-                <div className="bg-slate-900/50 border border-slate-900 rounded-2xl flex flex-col h-96 overflow-hidden">
-                  <div className="border-b border-slate-900 px-4 py-3 bg-slate-900/30 flex items-center justify-between">
+                <div className="bg-slate-900/50 border border-slate-900 rounded-2xl flex flex-col h-96 overflow-hidden shadow-xl shadow-black/10">
+                  <div className="border-b border-slate-900 px-4 py-3 bg-slate-900/40 flex items-center justify-between">
                     <div className="flex items-center space-x-2">
                       <Terminal className="h-4 w-4 text-indigo-400" />
                       <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">Activity Log Console</span>
                     </div>
                     <span className="flex h-1.5 w-1.5 rounded-full bg-blue-400 animate-pulse"></span>
                   </div>
-                  <div className="flex-1 p-4 font-mono text-[11px] text-slate-300 overflow-y-auto space-y-2.5">
+                  <div className="flex-1 p-4 font-mono text-[11px] text-slate-300 overflow-y-auto space-y-1.5">
                     {jobDetails.logs.map((l, idx) => (
-                      <div key={idx} className="flex gap-2.5 items-start leading-relaxed border-b border-slate-900/50 pb-1.5">
+                      <div
+                        key={idx}
+                        className={`flex gap-2.5 items-start leading-relaxed border-l-2 pl-2.5 py-1 ${
+                          l.level === "error" ? "border-red-500/40" : l.level === "warning" ? "border-amber-500/40" : "border-blue-500/30"
+                        }`}
+                      >
                         <span className="text-slate-500 shrink-0">{new Date(l.timestamp).toLocaleTimeString()}</span>
                         <span className={`font-semibold shrink-0 uppercase ${l.level === "error" ? "text-red-400" : l.level === "warning" ? "text-amber-400" : "text-blue-400"}`}>
                           [{l.level}]
@@ -603,14 +657,15 @@ export default function Dashboard() {
 
                 {/* Audited URLs List - only after a successful crawl */}
                 {jobDetails.status === "completed" && (
-                <div className="lg:col-span-2 bg-slate-900/50 border border-slate-900 rounded-2xl flex flex-col h-96 overflow-hidden">
+                <div className="lg:col-span-2 bg-slate-900/50 border border-slate-900 rounded-2xl flex flex-col h-96 overflow-hidden shadow-xl shadow-black/10">
                   {/* Filter Toolbar */}
-                  <div className="border-b border-slate-900 px-6 py-4 bg-slate-900/30 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                  <div className="border-b border-slate-900 px-6 py-4 bg-slate-900/40 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                     <div className="flex items-center space-x-2">
                       <List className="h-4 w-4 text-indigo-400" />
                       <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">Audited Sitemap URLs</span>
+                      <span className="rounded-full bg-slate-800 px-2 py-0.5 text-[10px] font-semibold text-slate-400">{filteredUrls.length}</span>
                     </div>
-                    
+
                     <div className="flex items-center space-x-2">
                       <div className="relative">
                         <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-slate-500" />
@@ -619,7 +674,7 @@ export default function Dashboard() {
                           placeholder="Search URL..."
                           value={searchTerm}
                           onChange={(e) => setSearchTerm(e.target.value)}
-                          className="pl-8 pr-3 py-1.5 rounded-lg border border-slate-800 bg-slate-950 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+                          className="pl-8 pr-3 py-1.5 rounded-lg border border-slate-800 bg-slate-950 text-xs text-white placeholder-slate-500 transition focus:outline-none focus:border-indigo-500"
                         />
                       </div>
                       <select
@@ -636,7 +691,7 @@ export default function Dashboard() {
                       </select>
                       <button
                         onClick={downloadCsv}
-                        className="flex items-center space-x-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 px-3 py-1.5 text-xs font-semibold text-white transition focus:outline-none"
+                        className="flex items-center space-x-1.5 rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 hover:shadow-lg hover:shadow-indigo-600/25 px-3 py-1.5 text-xs font-semibold text-white transition focus:outline-none"
                         title="Download CSV report"
                       >
                         <Download className="h-3.5 w-3.5" />
@@ -648,8 +703,8 @@ export default function Dashboard() {
                   {/* URLs List Container */}
                   <div className="flex-1 overflow-auto">
                     <table className="w-full text-left border-collapse">
-                      <thead>
-                        <tr className="border-b border-slate-900 bg-slate-900/20 text-xs font-medium text-slate-400">
+                      <thead className="sticky top-0 z-10">
+                        <tr className="border-b border-slate-900 bg-slate-900/95 backdrop-blur text-xs font-medium text-slate-400">
                           <th className="px-6 py-3">Audited URL</th>
                           <th className="px-6 py-3">Status</th>
                           <th className="px-6 py-3">Time</th>
@@ -657,28 +712,32 @@ export default function Dashboard() {
                           <th className="px-6 py-3"></th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-slate-900 text-xs text-slate-300">
+                      <tbody className="divide-y divide-slate-900/70 text-xs text-slate-300">
                         {filteredUrls.map((u) => {
                           return (
-                            <tr key={u.id} className="hover:bg-slate-900/20 transition">
+                            <tr key={u.id} className="hover:bg-indigo-500/5 transition">
                               <td className="px-6 py-3.5 font-medium text-white max-w-sm truncate" title={u.url}>
                                 {u.url}
                               </td>
                               <td className="px-6 py-3.5">
                                 {u.crawl_status === "pending" ? (
-                                  <span className="px-2 py-0.5 rounded font-mono bg-slate-800 text-slate-400 border border-slate-700/50">
+                                  <span className="px-2 py-0.5 rounded-full font-mono bg-slate-800 text-slate-400 border border-slate-700/50">
                                     Pending
                                   </span>
                                 ) : u.crawl_status === "checking" ? (
-                                  <span className="px-2 py-0.5 rounded font-mono bg-blue-500/10 text-blue-400 border border-blue-500/20 animate-pulse">
+                                  <span className="px-2 py-0.5 rounded-full font-mono bg-blue-500/10 text-blue-400 border border-blue-500/20 animate-pulse">
                                     Checking...
                                   </span>
                                 ) : (
-                                  <span className={`px-2 py-0.5 rounded font-mono ${
-                                    u.status_code && u.status_code < 300 ? "bg-emerald-500/10 text-emerald-400" :
-                                    u.status_code && u.status_code < 400 ? "bg-blue-500/10 text-blue-400" :
-                                    "bg-red-500/10 text-red-400"
+                                  <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full font-mono border ${
+                                    u.status_code && u.status_code < 300 ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" :
+                                    u.status_code && u.status_code < 400 ? "bg-blue-500/10 text-blue-400 border-blue-500/20" :
+                                    "bg-red-500/10 text-red-400 border-red-500/20"
                                   }`}>
+                                    <span className={`h-1.5 w-1.5 rounded-full ${
+                                      u.status_code && u.status_code < 300 ? "bg-emerald-400" :
+                                      u.status_code && u.status_code < 400 ? "bg-blue-400" : "bg-red-400"
+                                    }`} />
                                     {u.status_code || (u.crawl_status === "failed" ? "Fail" : "Pending")}
                                   </span>
                                 )}
@@ -718,7 +777,7 @@ export default function Dashboard() {
           ) : (
             <div className="flex h-full min-h-[70vh] flex-col items-center justify-center gap-10 py-12 text-slate-500 lg:flex-row lg:gap-16">
               <div className="max-w-xs text-center lg:text-left">
-                <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl border border-slate-800 bg-slate-900 text-slate-400 shadow-xl lg:mx-0">
+                <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl border border-indigo-500/20 bg-gradient-to-tr from-slate-900 to-slate-800 text-indigo-400 shadow-xl shadow-indigo-500/10 lg:mx-0">
                   <Server className="h-8 w-8" />
                 </div>
                 <h3 className="text-lg font-bold text-white">No Active Job Loaded</h3>
