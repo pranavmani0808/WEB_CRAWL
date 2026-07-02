@@ -12,6 +12,7 @@ import { restoreSession, clearSession, AuthUser } from "@/lib/auth";
 import Homepage, { PENDING_URL_KEY } from "@/components/Homepage";
 import CrawlingAnimation from "@/components/CrawlingAnimation";
 import PageDetailModal from "@/components/PageDetailModal";
+import AuditPreviewCard from "@/components/AuditPreviewCard";
 
 // Configure base API url
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -891,14 +892,15 @@ export default function Dashboard() {
               </div>
             </>
           ) : (
-            <div className="flex flex-col items-center justify-center py-24 text-slate-500 space-y-4">
-              <div className="h-16 w-16 bg-slate-900 border border-slate-800 rounded-2xl flex items-center justify-center text-slate-400 shadow-xl">
-                <Server className="h-8 w-8" />
-              </div>
-              <div className="text-center">
+            <div className="flex h-full min-h-[70vh] flex-col items-center justify-center gap-10 py-12 text-slate-500 lg:flex-row lg:gap-16">
+              <div className="max-w-xs text-center lg:text-left">
+                <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl border border-slate-800 bg-slate-900 text-slate-400 shadow-xl lg:mx-0">
+                  <Server className="h-8 w-8" />
+                </div>
                 <h3 className="text-lg font-bold text-white">No Active Job Loaded</h3>
-                <p className="text-sm mt-1">Select an existing crawl job from the history or start a new audit scan.</p>
+                <p className="mt-1 text-sm">Select an existing crawl job from the history, or add a domain on the left to start a new audit scan.</p>
               </div>
+              <AuditPreviewCard />
             </div>
           )}
         </main>
