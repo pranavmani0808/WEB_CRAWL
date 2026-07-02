@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     )
 
     # Core Settings
-    PROJECT_NAME: str = "Sitemap-Based Domain Inventory Crawler"
+    PROJECT_NAME: str = "Popz AI Crawl"
     ENVIRONMENT: str = "development"
     DEBUG: bool = True
     SECRET_KEY: str = "dev-secret-key-change-in-production-at-least-32-chars-long"

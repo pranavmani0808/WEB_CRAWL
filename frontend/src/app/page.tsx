@@ -335,7 +335,7 @@ export default function Dashboard() {
             <Globe className="h-5 w-5 text-white" />
           </div>
           <div>
-            <h1 className="text-lg font-bold tracking-tight text-white">LibreCrawl Admin</h1>
+            <h1 className="text-lg font-bold tracking-tight text-white">Popz AI Crawl</h1>
             <p className="text-xs text-slate-400">Sitemap-Based Domain Inventory Auditing</p>
           </div>
         </div>

@@ -2,7 +2,7 @@ import type { Metadata } from 'next'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'Domain Inventory Crawler',
+  title: 'Popz AI Crawl',
   description: 'Sitemap-based website auditing and crawler dashboard',
 }
 
