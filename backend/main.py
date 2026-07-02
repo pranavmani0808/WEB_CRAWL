@@ -311,6 +311,7 @@ async def get_crawl_job(job_id: str, current_user: User = Depends(get_current_us
             "http_checking": job.stage_http_checking
         },
         "progress": {
+            "total_sitemaps_found": job.total_sitemaps_found,
             "total_urls_found": job.total_urls_found,
             "total_urls_checked": job.total_urls_checked,
             "urls_2xx": job.urls_2xx,
@@ -358,7 +359,8 @@ async def list_job_urls(job_id: str, current_user: User = Depends(get_current_us
         "canonical_url": u.canonical_url,
         "is_indexable": u.is_indexable,
         "crawl_status": u.crawl_status,
-        "metadata": u.meta_data
+        "metadata": u.meta_data,
+        "seo_issues": u.seo_issues
     } for u in urls]
 
 

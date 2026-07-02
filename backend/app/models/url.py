@@ -55,6 +55,9 @@ class URL(Document):
     # Metadata
     meta_data: dict = {}
 
+    # SEO/accessibility/technical issues detected during crawl (see IssueDetector)
+    seo_issues: List[dict] = []
+
     class Settings:
         name = "urls"
         indexes = [

@@ -398,6 +398,7 @@ class CrawlerEngine:
                         url_obj.robots_meta = None
                         url_obj.is_indexable = None
                         url_obj.meta_data = {}
+                        url_obj.seo_issues = []
                         url_obj.error_details = None
                         url_obj.crawl_attempt = 0
                         await url_obj.save()
@@ -569,6 +570,7 @@ class CrawlerEngine:
                 url_obj.robots_meta = seo_data.get('robots')
                 url_obj.meta_data = seo_data
 
+            url_obj.seo_issues = issues
             url_obj.crawl_status = URLCrawlStatus.CHECKED.value
             url_obj.last_checked_at = datetime.utcnow()
             await url_obj.save()

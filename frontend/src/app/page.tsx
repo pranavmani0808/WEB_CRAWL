@@ -42,6 +42,7 @@ interface JobDetails {
     http_checking: boolean;
   };
   progress: {
+    total_sitemaps_found: number;
     total_urls_found: number;
     total_urls_checked: number;
     urls_2xx: number;
@@ -74,6 +75,7 @@ interface CrawledUrl {
   is_indexable: boolean | null;
   crawl_status?: string;
   metadata: any;
+  seo_issues?: { type: string; category: string; issue: string; details: string }[];
 }
 
 export default function Dashboard() {
@@ -699,7 +701,7 @@ export default function Dashboard() {
                       ></div>
                     </div>
                     <div className="flex justify-between text-xs text-slate-500 mt-2">
-                      <span>Sitemaps Found: {jobDetails.progress.total_urls_found}</span>
+                      <span>Sitemaps Found: {jobDetails.progress.total_sitemaps_found}</span>
                       <span>{Math.max(jobDetails.progress.total_urls_found, jobDetails.progress.total_urls_checked) > 0 ? Math.round((jobDetails.progress.total_urls_checked / Math.max(jobDetails.progress.total_urls_found, jobDetails.progress.total_urls_checked)) * 100) : 0}%</span>
                     </div>
                   </div>
@@ -813,7 +815,7 @@ export default function Dashboard() {
                       </thead>
                       <tbody className="divide-y divide-slate-900 text-xs text-slate-300">
                         {filteredUrls.map((u) => {
-                          const issuesCount = u.metadata?.images?.filter((i: any) => !i.alt).length || 0;
+                          const issuesCount = u.seo_issues?.length || 0;
                           return (
                             <tr key={u.id} className="hover:bg-slate-900/20 transition">
                               <td className="px-6 py-3.5 font-medium text-white max-w-sm truncate" title={u.url}>
