@@ -6,7 +6,7 @@ import axios from "axios";
 import {
   Play, RotateCw, Globe,
   Clock, Activity, Check, Server, Terminal, List, Search,
-  Pause, Trash2, StopCircle, Download, LogOut, Eye
+  Download, LogOut, Eye
 } from "lucide-react";
 import { restoreSession, clearSession, AuthUser } from "@/lib/auth";
 import Homepage, { PENDING_URL_KEY } from "@/components/Homepage";
@@ -89,10 +89,6 @@ export default function Dashboard() {
   const [urlInput, setUrlInput] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isRetryingAll, setIsRetryingAll] = useState(false);
-  const [retryingJobId, setRetryingJobId] = useState<string | null>(null);
-  const [pausingJobId, setPausingJobId] = useState<string | null>(null);
-  const [deletingJobId, setDeletingJobId] = useState<string | null>(null);
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [jobs, setJobs] = useState<CrawlJob[]>([]);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [jobDetails, setJobDetails] = useState<JobDetails | null>(null);
@@ -155,75 +151,6 @@ export default function Dashboard() {
       setCrawledUrls(urlRes.data);
     } catch (err) {
       console.error("Failed to load job details", err);
-    }
-  };
-
-  // Retry a specific job
-  const retryJob = async (jobId: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setRetryingJobId(jobId);
-    try {
-      await axios.post(`${API_BASE}/api/crawl/jobs/${jobId}/retry`);
-      setActiveJobId(jobId);
-      await loadJobs();
-    } catch (err) {
-      console.error("Failed to retry job", err);
-    } finally {
-      setRetryingJobId(null);
-    }
-  };
-
-  // Pause a running job
-  const pauseJob = async (jobId: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setPausingJobId(jobId);
-    try {
-      await axios.post(`${API_BASE}/api/crawl/jobs/${jobId}/pause`);
-      await loadJobs();
-      if (activeJobId === jobId) loadJobDetails(jobId);
-    } catch (err) {
-      console.error("Failed to pause job", err);
-    } finally {
-      setPausingJobId(null);
-    }
-  };
-
-  // Resume a paused job
-  const resumeJob = async (jobId: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setPausingJobId(jobId);
-    try {
-      await axios.post(`${API_BASE}/api/crawl/jobs/${jobId}/resume`);
-      await loadJobs();
-      if (activeJobId === jobId) loadJobDetails(jobId);
-    } catch (err) {
-      console.error("Failed to resume job", err);
-    } finally {
-      setPausingJobId(null);
-    }
-  };
-
-  // Delete a job
-  const deleteJob = async (jobId: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (confirmDeleteId !== jobId) {
-      setConfirmDeleteId(jobId);
-      return;
-    }
-    setDeletingJobId(jobId);
-    setConfirmDeleteId(null);
-    try {
-      await axios.delete(`${API_BASE}/api/crawl/jobs/${jobId}`);
-      if (activeJobId === jobId) {
-        setActiveJobId(null);
-        setJobDetails(null);
-        setCrawledUrls([]);
-      }
-      await loadJobs();
-    } catch (err) {
-      console.error("Failed to delete job", err);
-    } finally {
-      setDeletingJobId(null);
     }
   };
 
@@ -440,109 +367,6 @@ export default function Dashboard() {
             </div>
           )}
 
-          {/* Job History */}
-          <div className="flex-1 flex flex-col space-y-3">
-            <div className="flex items-center justify-between">
-              <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-400">Crawl Jobs History</h2>
-              <button onClick={loadJobs} className="text-slate-400 hover:text-white">
-                <RotateCw className="h-3.5 w-3.5" />
-              </button>
-            </div>
-
-            <div className="flex-1 space-y-2 overflow-y-auto pr-1">
-              {jobs.map((j) => (
-                <div
-                  key={j.id}
-                  onClick={() => { setActiveJobId(j.id); setConfirmDeleteId(null); }}
-                  className={`group w-full text-left p-3 rounded-lg border transition cursor-pointer relative ${
-                    activeJobId === j.id
-                      ? "bg-slate-900 border-slate-800 text-white"
-                      : "bg-slate-900/40 border-transparent hover:bg-slate-900/60 text-slate-300"
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="font-semibold text-sm truncate max-w-[110px]">{j.domain}</span>
-                    <div className="flex items-center gap-1">
-                      {/* Retry button for pending/failed, and for running - a job can get
-                          orphaned (stuck at "running" forever) if the backend worker
-                          restarts mid-crawl, and this is the only way to recover it. */}
-                      {(j.status === "pending" || j.status === "failed" || j.status === "running") && (
-                        <button
-                          onClick={(e) => retryJob(j.id, e)}
-                          disabled={retryingJobId === j.id}
-                          title="Re-dispatch this job"
-                          className={`text-slate-500 hover:text-indigo-400 transition disabled:opacity-40 p-0.5 rounded ${
-                            j.status === "running" ? "opacity-0 group-hover:opacity-100" : ""
-                          }`}
-                        >
-                          <RotateCw className={`h-3 w-3 ${retryingJobId === j.id ? "animate-spin" : ""}`} />
-                        </button>
-                      )}
-                      {/* Pause button for running/pending */}
-                      {(j.status === "running" || j.status === "pending") && (
-                        <button
-                          onClick={(e) => pauseJob(j.id, e)}
-                          disabled={pausingJobId === j.id}
-                          title="Pause this job"
-                          className="opacity-0 group-hover:opacity-100 text-slate-500 hover:text-amber-400 transition-all disabled:opacity-40 p-0.5 rounded"
-                        >
-                          {pausingJobId === j.id
-                            ? <RotateCw className="h-3 w-3 animate-spin" />
-                            : <Pause className="h-3 w-3" />}
-                        </button>
-                      )}
-                      {/* Resume button for paused */}
-                      {j.status === "paused" && (
-                        <button
-                          onClick={(e) => resumeJob(j.id, e)}
-                          disabled={pausingJobId === j.id}
-                          title="Resume this job"
-                          className="text-amber-500 hover:text-emerald-400 transition disabled:opacity-40 p-0.5 rounded"
-                        >
-                          {pausingJobId === j.id
-                            ? <RotateCw className="h-3 w-3 animate-spin" />
-                            : <Play className="h-3 w-3 fill-current" />}
-                        </button>
-                      )}
-                      {/* Delete button — first click shows red confirm, second click deletes */}
-                      <button
-                        onClick={(e) => deleteJob(j.id, e)}
-                        disabled={deletingJobId === j.id}
-                        title={confirmDeleteId === j.id ? "Click again to confirm delete" : "Delete this job"}
-                        className={`transition-all p-0.5 rounded disabled:opacity-40 ${
-                          confirmDeleteId === j.id
-                            ? "opacity-100 text-red-400 animate-pulse"
-                            : "opacity-0 group-hover:opacity-100 text-slate-500 hover:text-red-400"
-                        }`}
-                      >
-                        {deletingJobId === j.id
-                          ? <RotateCw className="h-3 w-3 animate-spin" />
-                          : confirmDeleteId === j.id
-                          ? <StopCircle className="h-3 w-3" />
-                          : <Trash2 className="h-3 w-3" />}
-                      </button>
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded-full border ${getStatusColor(j.status)}`}>
-                        {j.status}
-                      </span>
-                    </div>
-                  </div>
-                  <div className="mt-1 flex items-center justify-between text-xs text-slate-500">
-                    <span>{j.total_urls_checked} / {j.total_urls_found} URLs</span>
-                    <span>{new Date(j.created_at).toLocaleDateString()}</span>
-                  </div>
-                  {/* Confirm delete hint */}
-                  {confirmDeleteId === j.id && (
-                    <div className="mt-1.5 text-[10px] text-red-400/80 font-medium">
-                      ⚠ Click delete again to confirm
-                    </div>
-                  )}
-                </div>
-              ))}
-              {jobs.length === 0 && (
-                <div className="text-center py-6 text-sm text-slate-500">No crawl jobs found yet.</div>
-              )}
-            </div>
-          </div>
         </aside>
 
         {/* Dashboard Panels */}
@@ -898,7 +722,7 @@ export default function Dashboard() {
                   <Server className="h-8 w-8" />
                 </div>
                 <h3 className="text-lg font-bold text-white">No Active Job Loaded</h3>
-                <p className="mt-1 text-sm">Select an existing crawl job from the history, or add a domain on the left to start a new audit scan.</p>
+                <p className="mt-1 text-sm">Add a domain on the left to start a new audit scan.</p>
               </div>
               <AuditPreviewCard />
             </div>
