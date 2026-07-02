@@ -31,6 +31,15 @@ from app.crawler.issue_detector import IssueDetector
 
 logger = logging.getLogger(__name__)
 
+# httpx's default User-Agent ("python-httpx/x.y.z") gets blocked outright by most
+# WAFs/bot-protection (Cloudflare, Vercel, etc.) even for public pages. A standard
+# browser UA plus the headers a real browser sends avoids that false-positive block.
+DEFAULT_REQUEST_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
 def get_url_hash(url: str) -> str:
     return hashlib.sha256(url.encode('utf-8')).hexdigest()
 
@@ -106,7 +115,12 @@ class CrawlerEngine:
             limits = httpx.Limits(max_keepalive_connections=5, max_connections=self.job.max_workers)
             timeout = httpx.Timeout(self.job.timeout_seconds)
 
-            async with httpx.AsyncClient(limits=limits, timeout=timeout, follow_redirects=self.job.follow_redirects) as client:
+            async with httpx.AsyncClient(
+                limits=limits,
+                timeout=timeout,
+                follow_redirects=self.job.follow_redirects,
+                headers=DEFAULT_REQUEST_HEADERS,
+            ) as client:
                 self.sitemap_parser = SitemapParser(client, self.domain.domain, timeout=self.job.timeout_seconds)
                 self.rate_limiter = RateLimiter(requests_per_second=10.0)
                 self.issue_detector = IssueDetector()
@@ -190,7 +204,7 @@ class CrawlerEngine:
 
         # Check Server Header via HEAD request
         try:
-            async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            async with httpx.AsyncClient(timeout=10, follow_redirects=True, headers=DEFAULT_REQUEST_HEADERS) as client:
                 res = await client.head(self.domain.original_url)
                 server = res.headers.get("server")
                 if server:
@@ -208,7 +222,7 @@ class CrawlerEngine:
         self.domain.robots_txt_fetched_at = datetime.utcnow()
 
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
+            async with httpx.AsyncClient(timeout=10, headers=DEFAULT_REQUEST_HEADERS) as client:
                 res = await client.get(robots_url)
                 if res.status_code == 200:
                     self.domain.robots_txt_content = res.text
