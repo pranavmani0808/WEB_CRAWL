@@ -46,6 +46,15 @@ def get_url_hash(url: str) -> str:
 class CrawlerEngine:
     """Manages the full lifecycle of a domain crawl job"""
 
+    # (max_workers, requests_per_second) applied instead of the job's configured
+    # values when this domain was crawled recently - see _throttle_for_recrawl.
+    # Ordered narrowest-window first; the first matching threshold wins.
+    RECRAWL_THROTTLE_TIERS = [
+        (300, 4, 2.0),     # crawled within the last 5 minutes
+        (1800, 8, 5.0),    # within the last 30 minutes
+        (3600, 16, 7.0),   # within the last hour
+    ]
+
     def __init__(self, crawl_job_id: uuid.UUID):
         self.crawl_job_id = crawl_job_id
         self.job = None
@@ -54,6 +63,9 @@ class CrawlerEngine:
         self.rate_limiter = None
         self.issue_detector = None
         self.db_lock = asyncio.Lock()
+        # Set from the job's configured value, then possibly throttled down in
+        # execute() if this domain was crawled recently - see _throttle_for_recrawl.
+        self.effective_max_workers = None
         # Tracks the last total_urls_checked value we synced stats at, and
         # guards the sync itself - see _crawl_single_url for why this can't
         # just be "checked % 10 == 0" under concurrency.
@@ -106,6 +118,7 @@ class CrawlerEngine:
                 return
 
             self.domain = await Domain.get(self.job.domain_id)
+            self.effective_max_workers, rate_limit = self._throttle_for_recrawl()
 
             # Reset stuck URLs from previous interrupted runs
             stuck_urls = await URL.find(
@@ -125,9 +138,16 @@ class CrawlerEngine:
             await self.domain.save()
 
             await self.log_event("info", f"Started crawl job for {self.domain.original_url}", event_type="crawl_started")
+            if self.effective_max_workers < self.job.max_workers:
+                await self.log_event(
+                    "info",
+                    f"This domain was crawled recently - throttling to {self.effective_max_workers} workers "
+                    f"/ {rate_limit} req/s (configured: {self.job.max_workers} workers) to avoid tripping rate limits.",
+                    event_type="recrawl_throttled"
+                )
 
             # Setup tools
-            limits = httpx.Limits(max_keepalive_connections=5, max_connections=self.job.max_workers)
+            limits = httpx.Limits(max_keepalive_connections=5, max_connections=self.effective_max_workers)
             timeout = httpx.Timeout(self.job.timeout_seconds)
 
             async with httpx.AsyncClient(
@@ -137,7 +157,7 @@ class CrawlerEngine:
                 headers=DEFAULT_REQUEST_HEADERS,
             ) as client:
                 self.sitemap_parser = SitemapParser(client, self.domain.domain, timeout=self.job.timeout_seconds)
-                self.rate_limiter = RateLimiter(requests_per_second=10.0)
+                self.rate_limiter = RateLimiter(requests_per_second=rate_limit)
                 self.issue_detector = IssueDetector()
 
                 # Stage 1: Domain Validation
@@ -172,6 +192,29 @@ class CrawlerEngine:
                 self.domain.status = DomainStatus.FAILED.value
                 await self.domain.save()
             await self.log_event("error", f"Crawl failed: {str(e)}", event_type="crawl_failed", details={"error": str(e)})
+
+    def _throttle_for_recrawl(self) -> tuple:
+        """Scale down concurrency/rate if this domain was crawled recently.
+
+        Hitting the same target repeatedly in a short window (e.g. re-testing,
+        or re-crawling right after a previous run) is what trips target-side
+        WAF rate limits and turns into a wave of 403/429s. Reading
+        domain.last_crawl_at here (before this run overwrites it on
+        completion) lets us back off automatically instead of always crawling
+        at full configured concurrency.
+        """
+        default_workers = self.job.max_workers
+        default_rate = 10.0
+
+        if not self.domain.last_crawl_at:
+            return default_workers, default_rate
+
+        elapsed = (datetime.utcnow() - self.domain.last_crawl_at).total_seconds()
+        for window_seconds, throttled_workers, throttled_rate in self.RECRAWL_THROTTLE_TIERS:
+            if elapsed < window_seconds:
+                return min(default_workers, throttled_workers), throttled_rate
+
+        return default_workers, default_rate
 
     async def _stage_domain_validation(self):
         """DNS resolution, SSL verification and initial HTTP head check"""
@@ -471,7 +514,7 @@ class CrawlerEngine:
         # Keep track of active task set and overall scheduled URL strings
         active_urls = set(u.url for u in urls)
         running_tasks = set()
-        sem = asyncio.Semaphore(self.job.max_workers)
+        sem = asyncio.Semaphore(self.effective_max_workers)
 
         async def crawl_and_release(url_to_crawl: URL):
             try:
