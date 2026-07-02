@@ -414,9 +414,12 @@ class CrawlerEngine:
         # Discover sitemaps (using callback)
         await self.sitemap_parser.discover_sitemaps(self.domain.original_url, on_sitemap_parsed=handle_sitemap_parsed)
 
-        # Check if any sitemaps were found/mapped. If not, trigger fallback
-        if not sitemap_mapping:
-            await self.log_event("info", "No sitemaps found. Creating a default fallback sitemap", event_type="sitemap_fallback")
+        # Fall back to crawling at least the homepage if no usable URLs were
+        # found - this can happen even when sitemap *records* got created
+        # (e.g. every guessed sitemap path 301s to a generic homepage instead
+        # of returning real XML), so check total_urls rather than sitemap_mapping.
+        if total_urls == 0:
+            await self.log_event("info", "No usable sitemap URLs found. Creating a default fallback sitemap", event_type="sitemap_fallback")
             fallback_sitemap_url = f"{self.domain.original_url.rstrip('/')}/sitemap_fallback.xml"
             fallback_data = {
                 'urls': [{'url': self.domain.original_url, 'lastmod': None, 'changefreq': None, 'priority': 1.0}],
