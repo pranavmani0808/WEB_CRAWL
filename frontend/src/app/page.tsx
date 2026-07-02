@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import axios from "axios";
 import {
   Play, RotateCw, Globe,
-  Clock, Activity, Check, Server, Terminal, List, Search,
+  Clock, Activity, Check, Terminal, List, Search,
   Download, LogOut, Eye, Gauge, BarChart3, Sparkles
 } from "lucide-react";
 import { restoreSession, clearSession, AuthUser } from "@/lib/auth";
@@ -776,12 +776,40 @@ export default function Dashboard() {
             </>
           ) : (
             <div className="flex h-full min-h-[70vh] flex-col items-center justify-center gap-10 py-12 text-slate-500 lg:flex-row lg:gap-16">
-              <div className="max-w-xs text-center lg:text-left">
-                <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl border border-indigo-500/20 bg-gradient-to-tr from-slate-900 to-slate-800 text-indigo-400 shadow-xl shadow-indigo-500/10 lg:mx-0">
-                  <Server className="h-8 w-8" />
+              <div className="w-full max-w-md text-center lg:text-left">
+                <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-indigo-500/20 bg-indigo-500/10 px-3 py-1 text-xs font-medium text-indigo-300">
+                  <Sparkles className="h-3.5 w-3.5" />
+                  Start your first audit
                 </div>
-                <h3 className="text-lg font-bold text-white">No Active Job Loaded</h3>
-                <p className="mt-1 text-sm">Add a domain on the left to start a new audit scan.</p>
+                <h3 className="text-2xl font-bold text-white tracking-tight">Audit a new domain</h3>
+                <p className="mt-1.5 text-sm">Enter a domain and we'll discover its sitemaps, crawl every URL, and flag issues live.</p>
+                <form onSubmit={handleStartCrawl} className="mt-6 flex flex-col gap-3 sm:flex-row">
+                  <div className="relative flex-1">
+                    <Globe className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                    <input
+                      type="text"
+                      placeholder="https://example.com"
+                      value={urlInput}
+                      onChange={(e) => setUrlInput(e.target.value)}
+                      disabled={isSubmitting}
+                      className="w-full rounded-xl border border-slate-800 bg-slate-900 py-3 pl-10 pr-3 text-sm text-white placeholder-slate-500 transition focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={isSubmitting}
+                    className="flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-indigo-600/25 transition hover:shadow-indigo-500/40 disabled:opacity-50"
+                  >
+                    {isSubmitting ? (
+                      <RotateCw className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <>
+                        <Play className="h-4 w-4 fill-current" />
+                        <span>Start Audit</span>
+                      </>
+                    )}
+                  </button>
+                </form>
               </div>
               <AuditPreviewCard />
             </div>
