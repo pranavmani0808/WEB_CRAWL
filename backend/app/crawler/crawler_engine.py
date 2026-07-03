@@ -88,6 +88,14 @@ class CrawlerEngine:
         # entirely for pages whose links are all already-known (the common
         # case once the crawl frontier stabilizes). Populated at stage start.
         self._known_url_hashes: Optional[set] = None
+        # Mid-crawl rate-limit detection - see _note_response_for_backoff.
+        # Pre-crawl throttling (_throttle_for_recrawl) only accounts for our
+        # own request history; it does nothing if a target starts blocking us
+        # mid-run for unrelated reasons, which just looked like the crawler
+        # hammering a WAF at full speed until the job finished.
+        self._consecutive_block_signals = 0
+        self._backed_off = False
+        self._backoff_lock = asyncio.Lock()
 
     async def log_event(self, level: str, message: str, event_type: str = None, entity_type: str = None, entity_id: str = None, details: dict = None):
         """Log event to python logger and database `crawl_logs` collection"""
@@ -135,14 +143,27 @@ class CrawlerEngine:
             self.domain = await Domain.get(self.job.domain_id)
             self.effective_max_workers, rate_limit = self._throttle_for_recrawl()
 
-            # Reset stuck URLs from previous interrupted runs
-            stuck_urls = await URL.find(
-                URL.domain_id == self.domain.id,
-                URL.crawl_status == URLCrawlStatus.CHECKING.value
-            ).to_list(None)
-            for url_obj in stuck_urls:
-                url_obj.crawl_status = URLCrawlStatus.PENDING.value
-                await url_obj.save()
+            # Reset every previously-known URL for this domain back to pending
+            # so a fresh "Start Audit" always does a full re-audit, not just
+            # whatever the sitemap happens to redeclare. Sitemap-declared URLs
+            # get reset again individually during sitemap parsing below (that's
+            # fine, it's a no-op there) - this specifically covers domains with
+            # no real sitemap, where pages are only ever discovered by
+            # following links: without this, a second crawl of the same domain
+            # only ever re-checked the single fallback seed URL, since every
+            # other page it had already discovered was sitting at
+            # crawl_status="checked" and never got re-queued.
+            await URL.find(URL.domain_id == self.domain.id).update(
+                {"$set": {
+                    "crawl_status": URLCrawlStatus.PENDING.value,
+                    "status_code": None,
+                    "status_category": None,
+                    "response_time_ms": None,
+                    "content_type": None,
+                    "content_length": None,
+                    "error_details": None,
+                }}
+            )
 
             # Update status
             self.job.status = CrawlJobStatus.RUNNING.value
@@ -244,6 +265,44 @@ class CrawlerEngine:
                 return min(default_workers, throttled_workers), throttled_rate
 
         return default_workers, default_rate
+
+    # Status codes treated as "this target is pushing back on us", not a
+    # normal client/server error - 403/429 are the obvious ones; 202 is here
+    # because we've seen at least one real WAF (otterly.ai) hand back 202 with
+    # no real content as its challenge/holding response instead of a 403.
+    BLOCK_SIGNAL_STATUSES = {202, 403, 429}
+    BLOCK_SIGNAL_THRESHOLD = 5
+
+    async def _note_response_for_backoff(self, status_code: int):
+        """Detect a target starting to rate-limit us mid-crawl and slow down.
+
+        _throttle_for_recrawl only accounts for our own request history
+        against this domain - it does nothing if the target blocks us for
+        unrelated reasons (shared IP, unusual traffic pattern, etc), in which
+        case the crawler would otherwise keep hammering it at full speed for
+        the rest of the job. This tracks consecutive block-like responses
+        across all concurrent tasks and permanently drops the request rate
+        once, the first time it sees a real run of them.
+        """
+        async with self._backoff_lock:
+            if status_code in self.BLOCK_SIGNAL_STATUSES:
+                self._consecutive_block_signals += 1
+            else:
+                self._consecutive_block_signals = 0
+
+            if self._backed_off or self._consecutive_block_signals < self.BLOCK_SIGNAL_THRESHOLD:
+                return
+
+            self._backed_off = True
+            new_rate = max(1.0, self.rate_limiter.requests_per_second / 4)
+
+        self.rate_limiter.update_rate(new_rate)
+        await self.log_event(
+            "warning",
+            f"{self.domain.domain} has returned {self.BLOCK_SIGNAL_THRESHOLD} rate-limit-like responses "
+            f"(403/429/202) in a row - slowing down to {new_rate} req/s for the rest of this crawl.",
+            event_type="mid_crawl_backoff"
+        )
 
     async def _check_cancelled(self):
         """Raise CrawlCancelledError if the user has asked this job to stop.
@@ -628,6 +687,8 @@ class CrawlerEngine:
             # Fetch URL
             response = await client.get(url_obj.url, timeout=self.job.timeout_seconds)
             response_time_ms = int((time.time() - start_time) * 1000)
+
+            await self._note_response_for_backoff(response.status_code)
 
             # Update URL details (first phase commit)
             url_obj.status_code = response.status_code
