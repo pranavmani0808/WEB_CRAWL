@@ -14,6 +14,7 @@ from app.models.crawl_log import CrawlLog
 from app.models.crawl_statistics import CrawlStatistics
 from app.models.user import User
 from app.models.report import Report
+from app.models.url_snapshot import UrlSnapshot
 from app.workers.tasks import crawl_domain_task
 from app.reports.pdf_generator import generate_crawl_pdf
 import uuid
@@ -403,6 +404,108 @@ async def download_job_pdf(job_id: str, current_user: User = Depends(get_current
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'}
     )
+
+
+@app.get("/api/crawl/jobs/{job_id}/comparable", tags=["Crawl"])
+async def list_comparable_jobs(job_id: str, current_user: User = Depends(get_current_user)):
+    """List other completed jobs for the same domain that have snapshot data
+    to compare against (jobs run before the comparison feature shipped have
+    no snapshot and can't be compared)."""
+    try:
+        job_uuid = uuid.UUID(job_id)
+    except ValueError:
+        return JSONResponse(status_code=400, content={"message": "Invalid job ID format"})
+
+    job = await CrawlJob.get(job_uuid)
+    if not job or job.user_id != current_user.id:
+        return JSONResponse(status_code=404, content={"message": "Job not found"})
+
+    other_jobs = await CrawlJob.find(
+        CrawlJob.domain_id == job.domain_id,
+        CrawlJob.status == "completed",
+        CrawlJob.user_id == current_user.id,
+    ).sort("-created_at").to_list(None)
+
+    comparable = []
+    for j in other_jobs:
+        if j.id == job_uuid:
+            continue
+        has_snapshot = await UrlSnapshot.find_one(UrlSnapshot.crawl_job_id == j.id)
+        if has_snapshot:
+            comparable.append({
+                "id": str(j.id),
+                "created_at": j.created_at.isoformat(),
+                "total_urls_checked": j.total_urls_checked,
+            })
+
+    return comparable
+
+
+@app.get("/api/crawl/jobs/{job_id}/compare/{other_job_id}", tags=["Crawl"])
+async def compare_crawl_jobs(job_id: str, other_job_id: str, current_user: User = Depends(get_current_user)):
+    """Diff two completed crawl jobs for the same domain using their frozen
+    UrlSnapshot records (live URL documents get overwritten by newer crawls,
+    so the snapshot is the only reliable source for an older job's results)."""
+    try:
+        job_a_uuid = uuid.UUID(job_id)
+        job_b_uuid = uuid.UUID(other_job_id)
+    except ValueError:
+        return JSONResponse(status_code=400, content={"message": "Invalid job ID format"})
+
+    job_a = await CrawlJob.get(job_a_uuid)
+    job_b = await CrawlJob.get(job_b_uuid)
+    if not job_a or job_a.user_id != current_user.id or not job_b or job_b.user_id != current_user.id:
+        return JSONResponse(status_code=404, content={"message": "Job not found"})
+    if job_a.domain_id != job_b.domain_id:
+        return JSONResponse(status_code=400, content={"message": "Jobs must be for the same domain"})
+
+    # Order chronologically regardless of which one was passed as job_id
+    older, newer = (job_a, job_b) if job_a.created_at <= job_b.created_at else (job_b, job_a)
+
+    older_snaps = await UrlSnapshot.find(UrlSnapshot.crawl_job_id == older.id).to_list(None)
+    newer_snaps = await UrlSnapshot.find(UrlSnapshot.crawl_job_id == newer.id).to_list(None)
+
+    if not older_snaps or not newer_snaps:
+        return JSONResponse(status_code=404, content={"message": "One or both jobs have no snapshot data to compare (crawled before this feature was added)"})
+
+    older_by_hash = {s.url_hash: s for s in older_snaps}
+    newer_by_hash = {s.url_hash: s for s in newer_snaps}
+
+    def is_broken(status_category):
+        return status_category in ("client_error", "server_error", "timeout", "dns_error")
+
+    added_urls = [newer_by_hash[h].url for h in newer_by_hash if h not in older_by_hash]
+    removed_urls = [older_by_hash[h].url for h in older_by_hash if h not in newer_by_hash]
+
+    newly_broken, newly_fixed, status_changes = [], [], []
+    for h, new_snap in newer_by_hash.items():
+        old_snap = older_by_hash.get(h)
+        if not old_snap:
+            continue
+        if old_snap.status_code != new_snap.status_code:
+            entry = {"url": new_snap.url, "old_status": old_snap.status_code, "new_status": new_snap.status_code}
+            status_changes.append(entry)
+            if not is_broken(old_snap.status_category) and is_broken(new_snap.status_category):
+                newly_broken.append(entry)
+            elif is_broken(old_snap.status_category) and not is_broken(new_snap.status_category):
+                newly_fixed.append(entry)
+
+    return {
+        "older_job": {"id": str(older.id), "created_at": older.created_at.isoformat(), "total_urls_checked": older.total_urls_checked},
+        "newer_job": {"id": str(newer.id), "created_at": newer.created_at.isoformat(), "total_urls_checked": newer.total_urls_checked},
+        "summary": {
+            "urls_added": len(added_urls),
+            "urls_removed": len(removed_urls),
+            "newly_broken": len(newly_broken),
+            "newly_fixed": len(newly_fixed),
+            "status_changed": len(status_changes),
+        },
+        "added_urls": added_urls[:200],
+        "removed_urls": removed_urls[:200],
+        "newly_broken": newly_broken[:200],
+        "newly_fixed": newly_fixed[:200],
+        "status_changes": status_changes[:200],
+    }
 
 
 @app.post("/api/crawl/jobs/{job_id}/retry", tags=["Crawl"])

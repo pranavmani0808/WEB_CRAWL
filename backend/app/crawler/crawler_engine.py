@@ -24,6 +24,7 @@ from app.models.crawl_job import CrawlJob
 from app.models.crawl_log import CrawlLog
 from app.models.crawl_statistics import CrawlStatistics
 from app.models.report import Report
+from app.models.url_snapshot import UrlSnapshot
 from app.crawler.rate_limiter import RateLimiter
 from app.crawler.seo_extractor import SEOExtractor
 from app.crawler.sitemap_parser import SitemapParser
@@ -210,6 +211,11 @@ class CrawlerEngine:
 
                 # Stage 4: Duplication and Reporting
                 await self._stage_reporting()
+
+            # Snapshot this run's results before marking complete, so a later
+            # crawl of the same domain (which overwrites these URL documents
+            # in place) can't erase the ability to compare against this run.
+            await self._snapshot_urls_for_comparison()
 
             # Mark Job as complete
             self.job.status = CrawlJobStatus.COMPLETED.value
@@ -1056,6 +1062,35 @@ class CrawlerEngine:
 
         await stats.save()
         await self.log_event("info", f"Reporting completed. Health Score: {stats.health_score}", event_type="reporting_completed", details={"health_score": stats.health_score})
+
+    async def _snapshot_urls_for_comparison(self):
+        """Freeze this job's checked URLs into UrlSnapshot so a later crawl of
+        the same domain (which overwrites these URL documents in place) can't
+        take away the ability to compare this run against a future one.
+        """
+        checked_urls = await URL.find(
+            URL.domain_id == self.domain.id,
+            URL.updated_at >= self.job.started_at,
+        ).to_list(None)
+
+        if not checked_urls:
+            return
+
+        snapshots = [
+            UrlSnapshot(
+                crawl_job_id=self.crawl_job_id,
+                domain_id=self.domain.id,
+                url=u.url,
+                url_hash=u.url_hash,
+                status_code=u.status_code,
+                status_category=u.status_category,
+                response_time_ms=u.response_time_ms,
+                is_indexable=u.is_indexable,
+                seo_issues=u.seo_issues,
+            )
+            for u in checked_urls
+        ]
+        await UrlSnapshot.insert_many(snapshots)
 
     async def _get_or_create_spider_sitemap(self) -> uuid.UUID:
         """Get or create a virtual sitemap entry for HTML link discovery.
