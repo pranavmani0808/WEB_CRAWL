@@ -403,14 +403,31 @@ async def retry_crawl_job(job_id: str, current_user: User = Depends(get_current_
 
 @app.post("/api/crawl/jobs/retry-pending", tags=["Crawl"])
 async def retry_all_pending_jobs(current_user: User = Depends(get_current_user)):
-    """Re-dispatch all of the current user's jobs currently stuck in pending state."""
+    """Re-dispatch all of the current user's stuck jobs (pending or failed).
+
+    Must match the frontend's "stuck job" definition (status pending OR
+    failed) - this used to only touch "pending" jobs, so a "failed" job left
+    the "Jobs stuck?" banner permanently stuck since Retry All was a silent
+    no-op for it.
+    """
     jobs = await CrawlJob.find(
-        CrawlJob.status == "pending",
+        {"status": {"$in": ["pending", "failed"]}},
         CrawlJob.user_id == current_user.id,
     ).to_list(None)
 
     dispatched = []
     for job in jobs:
+        job.status = "pending"
+        job.total_urls_found = 0
+        job.total_urls_checked = 0
+        job.urls_2xx = 0
+        job.urls_3xx = 0
+        job.urls_4xx = 0
+        job.urls_5xx = 0
+        job.urls_timeout = 0
+        job.urls_dns_error = 0
+        job.completed_at = None
+        await job.save()
         crawl_domain_task.delay(str(job.id))
         dispatched.append(str(job.id))
 
