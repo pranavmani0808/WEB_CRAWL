@@ -7,7 +7,7 @@ import axios from "axios";
 import {
   Play, RotateCw, Globe,
   Clock, Activity, Check, Terminal, List, Search,
-  Download, LogOut, Eye, Gauge, BarChart3, Sparkles, History, Square, Trash2
+  Download, LogOut, Eye, Gauge, BarChart3, Sparkles, History, Square, Trash2, FileText
 } from "lucide-react";
 import { restoreSession, clearSession, AuthUser } from "@/lib/auth";
 import Homepage, { PENDING_URL_KEY } from "@/components/Homepage";
@@ -92,6 +92,7 @@ export default function Dashboard() {
   const [isRetryingAll, setIsRetryingAll] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
   const [deletingJobId, setDeletingJobId] = useState<string | null>(null);
+  const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [jobs, setJobs] = useState<CrawlJob[]>([]);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
@@ -134,6 +135,28 @@ export default function Dashboard() {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+  };
+
+  // Download the server-generated PDF audit report
+  const downloadPdf = async () => {
+    if (!jobDetails) return;
+    setIsDownloadingPdf(true);
+    try {
+      const res = await axios.get(`${API_BASE}/api/crawl/jobs/${jobDetails.id}/pdf`, { responseType: "blob" });
+      const url = URL.createObjectURL(new Blob([res.data], { type: "application/pdf" }));
+      const link = document.createElement("a");
+      link.setAttribute("href", url);
+      link.setAttribute("download", `${jobDetails.domain}_audit_report.pdf`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Failed to download PDF report", err);
+      alert("Failed to generate PDF report.");
+    } finally {
+      setIsDownloadingPdf(false);
+    }
   };
 
   // Load jobs list
@@ -904,6 +927,19 @@ export default function Dashboard() {
                       >
                         <Download className="h-3.5 w-3.5" />
                         <span>Download CSV</span>
+                      </button>
+                      <button
+                        onClick={downloadPdf}
+                        disabled={isDownloadingPdf}
+                        className="flex shrink-0 items-center space-x-1.5 rounded-lg border border-slate-700 bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs font-semibold text-white transition focus:outline-none disabled:opacity-50"
+                        title="Download PDF report"
+                      >
+                        {isDownloadingPdf ? (
+                          <RotateCw className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <FileText className="h-3.5 w-3.5" />
+                        )}
+                        <span>PDF</span>
                       </button>
                     </div>
                   </div>
