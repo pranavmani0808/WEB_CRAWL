@@ -71,6 +71,78 @@ async def test_backoff_only_applies_once():
     assert engine.rate_limiter.requests_per_second == pytest.approx(2.5)
 
 
+async def test_update_job_progress_aggregates_status_buckets(mongo_db):
+    """The aggregation-based stats sync must bucket exactly like the old
+    fetch-everything Python loop: error categories win over status codes,
+    and only this job's run (updated_at >= started_at) is counted.
+    """
+    from datetime import datetime, timedelta
+
+    from app.models.crawl_job import CrawlJob as CrawlJobModel
+
+    domain = Domain(
+        user_id=uuid.uuid4(),
+        original_url="https://agg.com",
+        normalized_url="https://agg.com",
+        domain="agg.com",
+    )
+    await domain.insert()
+
+    job = CrawlJobModel(domain_id=domain.id, user_id=uuid.uuid4(), status="running")
+    job.started_at = datetime.utcnow() - timedelta(minutes=5)
+    await job.insert()
+
+    fixtures = [
+        (200, "success", 100),
+        (204, "success", 300),
+        (301, "redirect", 50),
+        (404, "client_error", 150),
+        (500, "server_error", None),
+        (None, "timeout", None),
+        (None, "dns_error", None),
+    ]
+    for i, (code, category, rt) in enumerate(fixtures):
+        await URL(
+            domain_id=domain.id,
+            sitemap_id=uuid.uuid4(),
+            url=f"https://agg.com/{i}",
+            url_hash=f"agg-{i}",
+            crawl_status=URLCrawlStatus.CHECKED.value,
+            status_code=code,
+            status_category=category,
+            response_time_ms=rt,
+        ).insert()
+
+    # A stale URL from a previous run of the same domain must be excluded.
+    stale = URL(
+        domain_id=domain.id,
+        sitemap_id=uuid.uuid4(),
+        url="https://agg.com/stale",
+        url_hash="agg-stale",
+        crawl_status=URLCrawlStatus.CHECKED.value,
+        status_code=200,
+        status_category="success",
+    )
+    await stale.insert()
+    await URL.find(URL.id == stale.id).update(
+        {"$set": {"updated_at": job.started_at - timedelta(days=1)}}
+    )
+
+    engine = CrawlerEngine(job.id)
+    engine.job = job
+    engine.domain = domain
+    await engine._update_job_progress()
+
+    assert job.urls_2xx == 2
+    assert job.urls_3xx == 1
+    assert job.urls_4xx == 1
+    assert job.urls_5xx == 1
+    assert job.urls_timeout == 1
+    assert job.urls_dns_error == 1
+    assert job.avg_response_time_ms == int((100 + 300 + 50 + 150) / 4)
+    assert job.crawl_speed_urls_per_sec is not None
+
+
 async def test_reset_domain_urls_for_recrawl_clears_previously_checked_urls(mongo_db):
     """Regression test for sitemap-less domains not fully re-crawling: every
     URL previously marked "checked" for a domain must go back to "pending"

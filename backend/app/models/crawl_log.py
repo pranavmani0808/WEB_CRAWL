@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import Optional
 from beanie import Document
 from pydantic import Field
+from pymongo import ASCENDING, DESCENDING, IndexModel
 
 
 class CrawlLog(Document):
@@ -23,3 +24,9 @@ class CrawlLog(Document):
 
     class Settings:
         name = "crawl_logs"
+        indexes = [
+            # crawl_logs grows unboundedly across all jobs, and the job
+            # detail endpoint filters on crawl_job_id on every UI poll -
+            # without this index each poll was a full collection scan.
+            IndexModel([("crawl_job_id", ASCENDING), ("timestamp", DESCENDING)]),
+        ]

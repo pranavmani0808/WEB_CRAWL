@@ -174,16 +174,26 @@ export default function Dashboard() {
     }
   };
 
-  // Load active job details
+  // Load active job details (status/progress/logs - the cheap poll)
   const loadJobDetails = async (jobId: string) => {
     try {
       const res = await axios.get(`${API_BASE}/api/crawl/jobs/${jobId}`);
       setJobDetails(res.data);
+    } catch (err) {
+      console.error("Failed to load job details", err);
+    }
+  };
 
+  // Load the audited-URL table separately - this payload includes full SEO
+  // metadata per page and gets large on big crawls, so it's refreshed only
+  // when the checked-count actually moves (see the effect below) rather than
+  // re-downloaded wholesale on every 3s status poll.
+  const loadJobUrls = async (jobId: string) => {
+    try {
       const urlRes = await axios.get(`${API_BASE}/api/crawl/jobs/${jobId}/urls`);
       setCrawledUrls(urlRes.data);
     } catch (err) {
-      console.error("Failed to load job details", err);
+      console.error("Failed to load job URLs", err);
     }
   };
 
@@ -291,11 +301,10 @@ export default function Dashboard() {
     return () => clearInterval(interval);
   }, [authChecked, user, hasLiveJobs]);
 
-  // Poll the full detail view (including the potentially large audited-URL
-  // list) only while the currently-viewed job itself is still active - once
-  // it's completed/failed/cancelled the data is final, so continuing to
-  // re-fetch and re-render a large URL table every 3s was pure wasted work
-  // and a real source of UI jank on big crawls.
+  // Poll the detail view (status/progress/logs) only while the
+  // currently-viewed job itself is still active - once it's
+  // completed/failed/cancelled the data is final, so continuing to re-fetch
+  // every 3s was pure wasted work.
   useEffect(() => {
     if (!(activeJobId && authChecked && user)) return;
     loadJobDetails(activeJobId);
@@ -305,6 +314,17 @@ export default function Dashboard() {
     const interval = setInterval(() => loadJobDetails(activeJobId), 3000);
     return () => clearInterval(interval);
   }, [activeJobId, jobDetails?.status]);
+
+  // Refresh the audited-URL table only when the crawl has actually made
+  // progress (checked-count moved) or settled into a final state - not on
+  // every status poll. The URL payload carries per-page SEO metadata and is
+  // by far the heaviest response in the app; re-downloading it 20x/minute
+  // while e.g. sitemap discovery was still running is what made the
+  // dashboard feel sluggish during big crawls.
+  useEffect(() => {
+    if (!(activeJobId && authChecked && user && jobDetails && jobDetails.id === activeJobId)) return;
+    loadJobUrls(activeJobId);
+  }, [activeJobId, authChecked, user, jobDetails?.id, jobDetails?.status, jobDetails?.progress?.total_urls_checked]);
 
   const handleStartCrawl = async (e: React.FormEvent) => {
     e.preventDefault();

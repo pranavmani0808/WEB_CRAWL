@@ -60,9 +60,9 @@ class CrawlerEngine:
     # values when this domain was crawled recently - see _throttle_for_recrawl.
     # Ordered narrowest-window first; the first matching threshold wins.
     RECRAWL_THROTTLE_TIERS = [
-        (300, 4, 2.0),     # crawled within the last 5 minutes
-        (1800, 8, 5.0),    # within the last 30 minutes
-        (3600, 16, 7.0),   # within the last hour
+        (300, 8, 5.0),     # crawled within the last 5 minutes
+        (1800, 16, 12.0),  # within the last 30 minutes
+        (3600, 24, 18.0),  # within the last hour
     ]
 
     def __init__(self, crawl_job_id: uuid.UUID):
@@ -163,8 +163,14 @@ class CrawlerEngine:
                     event_type="recrawl_throttled"
                 )
 
-            # Setup tools
-            limits = httpx.Limits(max_keepalive_connections=5, max_connections=self.effective_max_workers)
+            # Setup tools. Keep-alive pool sized to the worker count - with
+            # only 5 keep-alive slots (the httpx default), 32 concurrent
+            # workers meant most requests re-did the full TCP+TLS handshake,
+            # often costing more than the request itself.
+            limits = httpx.Limits(
+                max_keepalive_connections=self.effective_max_workers,
+                max_connections=self.effective_max_workers,
+            )
             timeout = httpx.Timeout(self.job.timeout_seconds)
 
             async with httpx.AsyncClient(
@@ -239,8 +245,13 @@ class CrawlerEngine:
         completion) lets us back off automatically instead of always crawling
         at full configured concurrency.
         """
+        # 25 req/s is the full-speed default; the mid-crawl backoff detector
+        # (_note_response_for_backoff) is the safety net that reins this in
+        # the moment a target actually starts pushing back, which is what
+        # makes a higher default safe - before that existed, 10 req/s was
+        # the only protection we had.
         default_workers = self.job.max_workers
-        default_rate = 10.0
+        default_rate = 25.0
 
         if not self.domain.last_crawl_at:
             return default_workers, default_rate
@@ -836,55 +847,85 @@ class CrawlerEngine:
         if should_sync:
             await self._update_job_progress()
 
+    @staticmethod
+    def _status_bucket_expr() -> dict:
+        """Mongo $switch expression bucketing a URL doc into a stat category.
+
+        Mirrors the old Python elif chain: error categories first (they have
+        no status_code), then status-code ranges.
+        """
+        def _cat_eq(cat):
+            return {"$eq": ["$status_category", cat]}
+
+        def _code_range(lo, hi=None):
+            conds = [{"$ne": ["$status_code", None]}, {"$gte": ["$status_code", lo]}]
+            if hi is not None:
+                conds.append({"$lt": ["$status_code", hi]})
+            return {"$and": conds}
+
+        return {
+            "$switch": {
+                "branches": [
+                    {"case": _cat_eq(URLStatusCategory.TIMEOUT.value), "then": "timeout"},
+                    {"case": _cat_eq(URLStatusCategory.DNS_ERROR.value), "then": "dns"},
+                    {"case": _cat_eq(URLStatusCategory.SSL_ERROR.value), "then": "ssl"},
+                    {"case": _code_range(200, 300), "then": "2xx"},
+                    {"case": _code_range(300, 400), "then": "3xx"},
+                    {"case": _code_range(400, 500), "then": "4xx"},
+                    {"case": _code_range(500), "then": "5xx"},
+                ],
+                "default": "other",
+            }
+        }
+
     async def _update_job_progress(self):
         """Recalculate and update database stats on the CrawlJob"""
         async with self.db_lock:
-            # Load stats for checked URLs in this job's domain. URLs are stored
-            # per-domain and reused across crawl runs, so this must be scoped
-            # to updated_at >= job.started_at - otherwise re-crawling a domain
-            # pulls in status-code counts left over from previous jobs (e.g. a
-            # job that only actually re-checked 1 URL showing hundreds of
-            # stale 2xx/4xx counts from an earlier run of the same domain).
-            checked_urls = await URL.find(
+            # Compute stats server-side with one aggregation instead of
+            # shipping every checked URL document over the wire: this runs
+            # every ~10 pages, so on large crawls the old fetch-everything
+            # version transferred O(n^2) total data across the run - and it
+            # did so while holding db_lock, stalling every worker's counter
+            # increment for the duration of an ever-growing Atlas read.
+            #
+            # The match must stay scoped to updated_at >= job.started_at:
+            # URLs are stored per-domain and reused across crawl runs, so an
+            # unscoped count would pull in status-code counts left over from
+            # previous jobs of the same domain.
+            rows = await URL.find(
                 URL.domain_id == self.domain.id,
                 URL.crawl_status == URLCrawlStatus.CHECKED.value,
                 URL.updated_at >= self.job.started_at
-            ).to_list(None)
+            ).aggregate([
+                {"$group": {
+                    "_id": self._status_bucket_expr(),
+                    "count": {"$sum": 1},
+                    "avg_rt": {"$avg": "$response_time_ms"},
+                    "rt_count": {"$sum": {"$cond": [{"$ne": ["$response_time_ms", None]}, 1, 0]}},
+                }}
+            ]).to_list()
 
-            if not checked_urls:
+            if not rows:
                 return
 
-            total_checked = len(checked_urls)
-            resp_times = [u.response_time_ms for u in checked_urls if u.response_time_ms is not None]
-            avg_resp_time = int(sum(resp_times) / len(resp_times)) if resp_times else None
+            buckets = {r["_id"]: r for r in rows}
 
-            # Reset counts
-            c_2xx = c_3xx = c_4xx = c_5xx = c_timeout = c_dns = c_ssl = 0
-            for url_obj in checked_urls:
-                if url_obj.status_category == URLStatusCategory.TIMEOUT.value:
-                    c_timeout += 1
-                elif url_obj.status_category == URLStatusCategory.DNS_ERROR.value:
-                    c_dns += 1
-                elif url_obj.status_category == URLStatusCategory.SSL_ERROR.value:
-                    c_ssl += 1
-                elif url_obj.status_code:
-                    if 200 <= url_obj.status_code < 300:
-                        c_2xx += 1
-                    elif 300 <= url_obj.status_code < 400:
-                        c_3xx += 1
-                    elif 400 <= url_obj.status_code < 500:
-                        c_4xx += 1
-                    elif url_obj.status_code >= 500:
-                        c_5xx += 1
+            def count_of(bucket):
+                return buckets.get(bucket, {}).get("count", 0)
+
+            total_checked = sum(r["count"] for r in rows)
+            weighted_rt = sum((r["avg_rt"] or 0) * r["rt_count"] for r in rows)
+            total_rt_count = sum(r["rt_count"] for r in rows)
+            avg_resp_time = int(weighted_rt / total_rt_count) if total_rt_count else None
 
             self.job.avg_response_time_ms = avg_resp_time
-            self.job.urls_2xx = c_2xx
-            self.job.urls_3xx = c_3xx
-            self.job.urls_4xx = c_4xx
-            self.job.urls_5xx = c_5xx
-            self.job.urls_timeout = c_timeout
-            self.job.urls_dns_error = c_dns
-            self.job.urls_ssl_error = c_ssl
+            self.job.urls_2xx = count_of("2xx")
+            self.job.urls_3xx = count_of("3xx")
+            self.job.urls_4xx = count_of("4xx")
+            self.job.urls_5xx = count_of("5xx")
+            self.job.urls_timeout = count_of("timeout")
+            self.job.urls_dns_error = count_of("dns")
+            self.job.urls_ssl_error = count_of("ssl")
 
             # Calculate speed
             elapsed_sec = (datetime.utcnow() - self.job.started_at).total_seconds()

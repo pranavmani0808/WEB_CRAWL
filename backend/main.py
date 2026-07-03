@@ -289,8 +289,13 @@ async def get_crawl_job(job_id: str, current_user: User = Depends(get_current_us
     # Fetch domain
     domain = await Domain.get(job.domain_id)
 
-    # Fetch logs
-    logs = await CrawlLog.find(CrawlLog.crawl_job_id == job_uuid).sort("timestamp").to_list(None)
+    # Fetch logs - most recent 200 only. This endpoint is polled every few
+    # seconds while a crawl runs, and big crawls generate thousands of
+    # per-URL issue logs; shipping all of them on every poll made the detail
+    # view progressively slower as the crawl went on. Fetch newest-first
+    # (matching the index), then flip back to chronological for the UI.
+    logs = await CrawlLog.find(CrawlLog.crawl_job_id == job_uuid).sort("-timestamp").limit(200).to_list()
+    logs.reverse()
 
     # Fetch statistics
     stats = await CrawlStatistics.find_one(CrawlStatistics.crawl_job_id == job_uuid)
