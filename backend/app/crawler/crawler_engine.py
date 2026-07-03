@@ -982,7 +982,12 @@ class CrawlerEngine:
         # Duplication check
         if len(html_results) > 1:
             await self.log_event("info", f"Running duplication checks on {len(html_results)} pages...", event_type="duplication_check_started")
-            dup_issues = self.issue_detector.detect_duplication_issues(html_results)
+            # Off-thread: even with its pre-filters this is O(n^2) pure-CPU
+            # work, and running it inline froze the event loop (cancellation
+            # checks, progress polls) for the whole comparison on big sites.
+            dup_issues = await asyncio.to_thread(
+                self.issue_detector.detect_duplication_issues, html_results
+            )
             for issue in dup_issues:
                 # Find matching url object
                 target_url_obj = next((u for u in checked_urls if u.url == issue['url']), None)

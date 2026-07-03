@@ -579,7 +579,7 @@ export default function Dashboard() {
                     <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-blue-400" />
                   </span>
                   <span className="font-medium">{j.domain}</span>
-                  <span className="text-slate-500">{j.total_urls_checked}/{j.total_urls_found || "?"}</span>
+                  <span className="text-slate-500">{j.total_urls_checked}/{Math.max(j.total_urls_found, j.total_urls_checked) || "?"}</span>
                 </button>
               ))}
             </div>

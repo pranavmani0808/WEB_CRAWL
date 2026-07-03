@@ -364,82 +364,123 @@ class IssueDetector:
                     'details': f'Image returned {status}: {img_url}'
                 })
 
+    # Weights for the per-field similarity blend used by the duplication
+    # check (shared by the cheap upper-bound pre-filter and the full scorer,
+    # which must agree for the pre-filter to be safe to skip on).
+    DUP_WEIGHTS = {'title': 0.35, 'desc': 0.35, 'h1': 0.20, 'word_count': 0.10}
+
     def detect_duplication_issues(self, all_results, similarity_threshold=0.85):
-        """Detect content duplication across all crawled pages"""
-        issues = []
-        processed_pairs = set()
+        """Detect content duplication across all crawled pages.
 
-        for i, result1 in enumerate(all_results):
-            url1 = result1.get('url', '')
-            if self._should_exclude(url1):
+        This is inherently O(n^2) in page count, so the inner loop has to be
+        cheap: fields are normalized once per page (not once per pair), and
+        each pair is first screened with a length-based upper bound on the
+        blended similarity - SequenceMatcher.ratio() can never exceed
+        2*min(len)/(len1+len2), so pairs that can't possibly reach the
+        threshold skip the expensive diff entirely. On a ~1200-page catalog
+        site this is the difference between seconds and several minutes of
+        the job hanging in "running" after all URLs were already checked.
+        """
+        from collections import Counter
+
+        pages = []
+        for result in all_results:
+            url = result.get('url', '')
+            if self._should_exclude(url):
                 continue
+            title = (result.get('title') or '').lower().strip()
+            desc = (result.get('meta_description') or '').lower().strip()
+            h1 = (result.get('h1') or '').lower().strip()
+            pages.append({
+                'url': url,
+                'title': title, 'desc': desc, 'h1': h1,
+                'title_len': len(title), 'desc_len': len(desc), 'h1_len': len(h1),
+                'title_ctr': Counter(title), 'desc_ctr': Counter(desc),
+                'word_count': result.get('word_count', 0) or 0,
+            })
 
-            for j, result2 in enumerate(all_results):
-                if i >= j:
+        w = self.DUP_WEIGHTS
+
+        def length_bound(len1, len2):
+            # Upper bound of SequenceMatcher.ratio() for these lengths.
+            if not len1 or not len2:
+                return 0.0
+            return 2.0 * min(len1, len2) / (len1 + len2)
+
+        def char_bound(c1, c2, len1, len2):
+            # Tighter upper bound: matching chars can't exceed the multiset
+            # intersection of the two strings' characters (this is exactly
+            # difflib's quick_ratio, computed on pre-built Counters).
+            if not len1 or not len2:
+                return 0.0
+            common = sum(min(n, c2[ch]) for ch, n in c1.items() if ch in c2)
+            return 2.0 * common / (len1 + len2)
+
+        issues = []
+        # Pages already reported as a duplicate of an earlier page. Without
+        # this, a template-heavy catalog site (where every product page is
+        # >85% similar to every other by this metric) produces O(n^2) issue
+        # records - a 1200-page site generated 1.4M "duplicate" issues, which
+        # is useless as a report and took minutes to even allocate. Each page
+        # is flagged at most once, against the first page it matched.
+        flagged = set()
+        for i in range(len(pages)):
+            if i in flagged:
+                continue
+            p1 = pages[i]
+            for j in range(i + 1, len(pages)):
+                if j in flagged:
+                    continue
+                p2 = pages[j]
+
+                wc1, wc2 = p1['word_count'], p2['word_count']
+                wc_sim = (min(wc1, wc2) / max(wc1, wc2)) if wc1 and wc2 else 0.0
+
+                # Screen 1: length-based bounds, near-free arithmetic.
+                title_b = length_bound(p1['title_len'], p2['title_len'])
+                desc_b = length_bound(p1['desc_len'], p2['desc_len'])
+                h1_b = length_bound(p1['h1_len'], p2['h1_len'])
+                if title_b * w['title'] + desc_b * w['desc'] + h1_b * w['h1'] + wc_sim * w['word_count'] < similarity_threshold:
                     continue
 
-                url2 = result2.get('url', '')
-                if self._should_exclude(url2):
+                # Screen 2: character-frequency bounds for the two
+                # heavyweight fields - tight enough to reject almost every
+                # non-duplicate pair on template-heavy catalog sites where
+                # all titles have similar lengths.
+                title_b = char_bound(p1['title_ctr'], p2['title_ctr'], p1['title_len'], p2['title_len'])
+                if title_b * w['title'] + desc_b * w['desc'] + h1_b * w['h1'] + wc_sim * w['word_count'] < similarity_threshold:
+                    continue
+                desc_b = char_bound(p1['desc_ctr'], p2['desc_ctr'], p1['desc_len'], p2['desc_len'])
+                if title_b * w['title'] + desc_b * w['desc'] + h1_b * w['h1'] + wc_sim * w['word_count'] < similarity_threshold:
                     continue
 
-                pair_key = tuple(sorted([url1, url2]))
-                if pair_key in processed_pairs:
+                # Full diffs, most expensive last, short-circuiting as each
+                # real score replaces its upper bound.
+                title_sim = self._text_similarity(p1['title'], p2['title'])
+                if title_sim * w['title'] + desc_b * w['desc'] + h1_b * w['h1'] + wc_sim * w['word_count'] < similarity_threshold:
                     continue
-                processed_pairs.add(pair_key)
+                desc_sim = self._text_similarity(p1['desc'], p2['desc'])
+                if title_sim * w['title'] + desc_sim * w['desc'] + h1_b * w['h1'] + wc_sim * w['word_count'] < similarity_threshold:
+                    continue
+                h1_sim = self._text_similarity(p1['h1'], p2['h1'])
+                similarity = (
+                    title_sim * w['title'] + desc_sim * w['desc'] +
+                    h1_sim * w['h1'] + wc_sim * w['word_count']
+                )
 
-                similarity = self._calculate_content_similarity(result1, result2)
                 if similarity >= similarity_threshold:
+                    flagged.add(j)
                     issues.append({
-                        'url': url1,
+                        'url': p2['url'],
                         'type': 'warning',
                         'category': 'Duplication',
                         'issue': 'Duplicate Content Detected',
-                        'details': f'Content is {similarity*100:.1f}% similar to {url2}'
-                    })
-                    issues.append({
-                        'url': url2,
-                        'type': 'warning',
-                        'category': 'Duplication',
-                        'issue': 'Duplicate Content Detected',
-                        'details': f'Content is {similarity*100:.1f}% similar to {url1}'
+                        'details': f'Content is {similarity*100:.1f}% similar to {p1["url"]}'
                     })
 
         with self.issues_lock:
             self.detected_issues.extend(issues)
         return issues
-
-    def _calculate_content_similarity(self, result1, result2):
-        """Calculate content similarity ratio (0.0 to 1.0)"""
-        title1 = result1.get('title', '').lower().strip()
-        title2 = result2.get('title', '').lower().strip()
-
-        desc1 = result1.get('meta_description', '').lower().strip()
-        desc2 = result2.get('meta_description', '').lower().strip()
-
-        h1_1 = result1.get('h1', '').lower().strip()
-        h1_2 = result2.get('h1', '').lower().strip()
-
-        word_count1 = result1.get('word_count', 0)
-        word_count2 = result2.get('word_count', 0)
-
-        title_sim = self._text_similarity(title1, title2) if title1 and title2 else 0.0
-        desc_sim = self._text_similarity(desc1, desc2) if desc1 and desc2 else 0.0
-        h1_sim = self._text_similarity(h1_1, h1_2) if h1_1 and h1_2 else 0.0
-
-        if word_count1 and word_count2:
-            max_count = max(word_count1, word_count2)
-            min_count = min(word_count1, word_count2)
-            word_count_sim = min_count / max_count if max_count > 0 else 0.0
-        else:
-            word_count_sim = 0.0
-
-        weights = {'title': 0.35, 'desc': 0.35, 'h1': 0.20, 'word_count': 0.10}
-        return (
-            title_sim * weights['title'] +
-            desc_sim * weights['desc'] +
-            h1_sim * weights['h1'] +
-            word_count_sim * weights['word_count']
-        )
 
     def _text_similarity(self, text1, text2):
         if not text1 or not text2:
