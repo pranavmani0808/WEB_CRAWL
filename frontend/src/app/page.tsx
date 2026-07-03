@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import axios from "axios";
 import {
@@ -98,6 +99,8 @@ export default function Dashboard() {
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedUrl, setSelectedUrl] = useState<CrawledUrl | null>(null);
   const [showHistory, setShowHistory] = useState(false);
+  const [historyPos, setHistoryPos] = useState<{ top: number; right: number } | null>(null);
+  const historyBtnRef = useRef<HTMLButtonElement>(null);
 
   // Export audited URLs to CSV
   const downloadCsv = () => {
@@ -317,7 +320,14 @@ export default function Dashboard() {
             <div className="flex items-center space-x-3 border-l border-slate-800 pl-4">
               <div className="relative">
                 <button
-                  onClick={() => setShowHistory((v) => !v)}
+                  ref={historyBtnRef}
+                  onClick={() => {
+                    if (!showHistory && historyBtnRef.current) {
+                      const rect = historyBtnRef.current.getBoundingClientRect();
+                      setHistoryPos({ top: rect.bottom + 8, right: window.innerWidth - rect.right });
+                    }
+                    setShowHistory((v) => !v);
+                  }}
                   title="View past crawls"
                   className={`flex items-center justify-center rounded-lg border p-1.5 transition ${
                     showHistory
@@ -327,10 +337,18 @@ export default function Dashboard() {
                 >
                   <History className="h-4 w-4" />
                 </button>
-                {showHistory && (
+                {showHistory && historyPos && typeof document !== "undefined" && createPortal(
                   <>
-                    <div className="fixed inset-0 z-30 bg-black/30" onClick={() => setShowHistory(false)} />
-                    <div className="absolute right-0 top-full z-40 mt-2 w-80 max-h-96 overflow-y-auto rounded-xl border border-slate-700 bg-slate-900 shadow-2xl shadow-black/60">
+                    {/* Rendered via portal at document.body - the header's backdrop-blur
+                        creates its own stacking context, which trapped this dropdown
+                        underneath later page content (e.g. the New Audit bar) despite
+                        a high z-index, since z-index only competes within the same
+                        stacking context. */}
+                    <div className="fixed inset-0 z-[100] bg-black/30" onClick={() => setShowHistory(false)} />
+                    <div
+                      style={{ position: "fixed", top: historyPos.top, right: historyPos.right }}
+                      className="z-[101] w-80 max-h-96 overflow-y-auto rounded-xl border border-slate-700 bg-slate-900 shadow-2xl shadow-black/60"
+                    >
                       <div className="flex items-center justify-between border-b border-slate-800 bg-slate-900 px-4 py-3">
                         <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">Past Crawls</span>
                         <button onClick={loadJobs} className="text-slate-500 transition hover:text-white" title="Refresh">
@@ -363,7 +381,8 @@ export default function Dashboard() {
                         )}
                       </div>
                     </div>
-                  </>
+                  </>,
+                  document.body
                 )}
               </div>
               <div className="flex items-center gap-2">
