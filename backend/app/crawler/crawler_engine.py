@@ -43,6 +43,15 @@ DEFAULT_REQUEST_HEADERS = {
 def get_url_hash(url: str) -> str:
     return hashlib.sha256(url.encode('utf-8')).hexdigest()
 
+
+class CrawlCancelledError(Exception):
+    """Raised internally when a user has asked a running crawl to stop.
+
+    Caught once in CrawlerEngine.execute() to do the actual status/cleanup -
+    see _check_cancelled for where this gets raised.
+    """
+    pass
+
 class CrawlerEngine:
     """Manages the full lifecycle of a domain crawl job"""
 
@@ -117,6 +126,12 @@ class CrawlerEngine:
                 logger.error(f"Crawl job {self.crawl_job_id} not found.")
                 return
 
+            # A cancel request may have arrived while this job was still
+            # queued (status flipped to "stopping" before a worker picked it
+            # up) - bail out immediately instead of starting the crawl at all.
+            if self.job.status == CrawlJobStatus.STOPPING.value:
+                raise CrawlCancelledError()
+
             self.domain = await Domain.get(self.job.domain_id)
             self.effective_max_workers, rate_limit = self._throttle_for_recrawl()
 
@@ -162,12 +177,15 @@ class CrawlerEngine:
 
                 # Stage 1: Domain Validation
                 await self._stage_domain_validation()
+                await self._check_cancelled()
 
                 # Stage 2: Sitemap Discovery
                 await self._stage_sitemap_discovery()
+                await self._check_cancelled()
 
                 # Stage 3: HTTP Checking / Crawling URLs
                 await self._stage_http_checking(client)
+                await self._check_cancelled()
 
                 # Stage 4: Duplication and Reporting
                 await self._stage_reporting()
@@ -181,6 +199,17 @@ class CrawlerEngine:
             await self.domain.save()
 
             await self.log_event("info", f"Successfully completed crawl job for {self.domain.original_url}", event_type="crawl_completed")
+
+        except CrawlCancelledError:
+            logger.info(f"Crawl job {self.crawl_job_id} was cancelled.")
+            if self.job:
+                self.job.status = CrawlJobStatus.CANCELLED.value
+                self.job.completed_at = datetime.utcnow()
+                await self.job.save()
+            if self.domain:
+                self.domain.status = DomainStatus.PAUSED.value
+                await self.domain.save()
+            await self.log_event("warning", "Crawl job was cancelled by the user", event_type="crawl_cancelled")
 
         except Exception as e:
             logger.exception(f"Unhandled exception during crawl execution: {e}")
@@ -215,6 +244,20 @@ class CrawlerEngine:
                 return min(default_workers, throttled_workers), throttled_rate
 
         return default_workers, default_rate
+
+    async def _check_cancelled(self):
+        """Raise CrawlCancelledError if the user has asked this job to stop.
+
+        Reads status fresh from Mongo rather than self.job.status, since the
+        cancel API endpoint flips it from a different process/request while
+        this engine is mid-run. Call this between stages and inside any
+        long-running loop (see _stage_http_checking) so a cancel request is
+        noticed within a few seconds instead of only after the whole crawl
+        finishes on its own.
+        """
+        current = await CrawlJob.get(self.job.id)
+        if current and current.status == CrawlJobStatus.STOPPING.value:
+            raise CrawlCancelledError()
 
     async def _stage_domain_validation(self):
         """DNS resolution, SSL verification and initial HTTP head check"""
@@ -531,9 +574,20 @@ class CrawlerEngine:
 
         # Main polling loop to check for new dynamically queued URLs (link-discovered
         # during the crawl). 1s is plenty responsive here and avoids hammering Atlas
-        # with a full collection scan 10x/sec for the entire crawl duration.
+        # with a full collection scan 10x/sec for the entire crawl duration. Also
+        # doubles as the cancellation check interval - a "Cancel" request needs the
+        # in-flight tasks actually torn down here, not just detected, otherwise
+        # they'd keep running detached after execute() moves on.
         while True:
             await asyncio.sleep(1.0)
+
+            current = await CrawlJob.get(self.job.id)
+            if current and current.status == CrawlJobStatus.STOPPING.value:
+                for task in running_tasks:
+                    task.cancel()
+                await asyncio.gather(*running_tasks, return_exceptions=True)
+                await self._update_job_progress()
+                raise CrawlCancelledError()
 
             pending_urls = await URL.find(
                 URL.domain_id == self.domain.id,

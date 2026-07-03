@@ -466,6 +466,37 @@ async def resume_crawl_job(job_id: str, current_user: User = Depends(get_current
     return {"message": "Job resumed", "job_id": str(job.id)}
 
 
+@app.post("/api/crawl/jobs/{job_id}/cancel", tags=["Crawl"])
+async def cancel_crawl_job(job_id: str, current_user: User = Depends(get_current_user)):
+    """Request that a running/pending crawl job stop.
+
+    This only flips the status to "stopping" - the crawler engine polls for
+    that on its own (see CrawlerEngine._check_cancelled) and does the actual
+    teardown, since it's the only thing that can safely cancel the in-flight
+    asyncio tasks and close the shared httpx client. The job settles into
+    "cancelled" within a few seconds once the engine notices.
+    """
+    try:
+        job_uuid = uuid.UUID(job_id)
+    except ValueError:
+        return JSONResponse(status_code=400, content={"message": "Invalid job ID format"})
+
+    job = await CrawlJob.get(job_uuid)
+
+    if not job or job.user_id != current_user.id:
+        return JSONResponse(status_code=404, content={"message": "Job not found"})
+
+    if job.status not in ("running", "pending"):
+        return JSONResponse(
+            status_code=400,
+            content={"message": f"Cannot cancel a job in '{job.status}' state"}
+        )
+
+    job.status = "stopping"
+    await job.save()
+    return {"message": "Cancellation requested", "job_id": str(job.id)}
+
+
 @app.delete("/api/crawl/jobs/{job_id}", tags=["Crawl"])
 async def delete_crawl_job(job_id: str, current_user: User = Depends(get_current_user)):
     """Permanently delete a crawl job and all associated data."""
