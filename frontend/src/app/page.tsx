@@ -7,7 +7,7 @@ import axios from "axios";
 import {
   Play, RotateCw, Globe,
   Clock, Activity, Check, Terminal, List, Search,
-  Download, LogOut, Eye, Gauge, BarChart3, Sparkles, History, Square
+  Download, LogOut, Eye, Gauge, BarChart3, Sparkles, History, Square, Trash2
 } from "lucide-react";
 import { restoreSession, clearSession, AuthUser } from "@/lib/auth";
 import Homepage, { PENDING_URL_KEY } from "@/components/Homepage";
@@ -91,6 +91,8 @@ export default function Dashboard() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isRetryingAll, setIsRetryingAll] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
+  const [deletingJobId, setDeletingJobId] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [jobs, setJobs] = useState<CrawlJob[]>([]);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [jobDetails, setJobDetails] = useState<JobDetails | null>(null);
@@ -185,6 +187,29 @@ export default function Dashboard() {
       console.error("Failed to cancel crawl job", err);
     } finally {
       setIsCancelling(false);
+    }
+  };
+
+  // Delete a job - first click arms a confirmation, second click actually deletes.
+  const deleteJob = async (jobId: string) => {
+    if (confirmDeleteId !== jobId) {
+      setConfirmDeleteId(jobId);
+      return;
+    }
+    setDeletingJobId(jobId);
+    setConfirmDeleteId(null);
+    try {
+      await axios.delete(`${API_BASE}/api/crawl/jobs/${jobId}`);
+      if (activeJobId === jobId) {
+        setActiveJobId(null);
+        setJobDetails(null);
+        setCrawledUrls([]);
+      }
+      await loadJobs();
+    } catch (err) {
+      console.error("Failed to delete job", err);
+    } finally {
+      setDeletingJobId(null);
     }
   };
 
@@ -357,14 +382,17 @@ export default function Dashboard() {
                       </div>
                       <div className="space-y-1 bg-slate-900 p-2">
                         {jobs.map((j) => (
-                          <button
+                          <div
                             key={j.id}
+                            role="button"
+                            tabIndex={0}
                             onClick={() => { setActiveJobId(j.id); setShowHistory(false); }}
-                            className={`w-full rounded-lg p-2.5 text-left transition ${
+                            onKeyDown={(e) => { if (e.key === "Enter") { setActiveJobId(j.id); setShowHistory(false); } }}
+                            className={`group relative w-full cursor-pointer rounded-lg p-2.5 text-left transition ${
                               activeJobId === j.id ? "bg-slate-800" : "hover:bg-slate-800/60"
                             }`}
                           >
-                            <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center justify-between gap-2 pr-14">
                               <span className="truncate text-sm font-medium text-white">{j.domain}</span>
                               <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] ${getStatusColor(j.status)}`}>
                                 {j.status}
@@ -374,7 +402,35 @@ export default function Dashboard() {
                               <span>{j.total_urls_checked} / {j.total_urls_found} URLs</span>
                               <span>{new Date(j.created_at).toLocaleDateString()}</span>
                             </div>
-                          </button>
+
+                            {/* Row actions - only visible on hover so the list stays scannable */}
+                            <div className="absolute right-2 top-2 flex items-center gap-1 opacity-0 transition group-hover:opacity-100">
+                              {(j.status === "running" || j.status === "pending") && (
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); cancelCrawl(j.id); }}
+                                  disabled={isCancelling}
+                                  title="Stop this crawl"
+                                  className="rounded p-1 text-slate-500 transition hover:text-red-400 disabled:opacity-40"
+                                >
+                                  <Square className="h-3 w-3 fill-current" />
+                                </button>
+                              )}
+                              <button
+                                onClick={(e) => { e.stopPropagation(); deleteJob(j.id); }}
+                                disabled={deletingJobId === j.id}
+                                title={confirmDeleteId === j.id ? "Click again to confirm delete" : "Delete this job"}
+                                className={`rounded p-1 transition disabled:opacity-40 ${
+                                  confirmDeleteId === j.id ? "text-red-400" : "text-slate-500 hover:text-red-400"
+                                }`}
+                              >
+                                {deletingJobId === j.id ? (
+                                  <RotateCw className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Trash2 className="h-3 w-3" />
+                                )}
+                              </button>
+                            </div>
+                          </div>
                         ))}
                         {jobs.length === 0 && (
                           <div className="py-8 text-center text-xs text-slate-500">No past crawls yet.</div>
@@ -441,7 +497,7 @@ export default function Dashboard() {
                   <Sparkles className="h-3.5 w-3.5 text-indigo-400" />
                   New audit
                 </div>
-                <div className="relative flex-1">
+                <div className="relative w-full sm:w-80">
                   <Globe className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
                   <input
                     type="text"
