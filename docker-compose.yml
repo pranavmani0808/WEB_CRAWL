@@ -37,7 +37,7 @@ services:
       - backend
     volumes:
       - ./backend:/app
-    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=4
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=6
     networks:
       - crawler-network
 

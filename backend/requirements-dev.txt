@@ -1,0 +1,5 @@
+# Test-only dependencies, kept separate from requirements.txt because
+# mongomock-motor's own pymongo/motor version floor is newer than the pins
+# used in production - these are never installed in the deployed Docker image.
+-r requirements.txt
+mongomock-motor==0.0.36

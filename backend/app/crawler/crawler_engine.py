@@ -144,27 +144,7 @@ class CrawlerEngine:
             self.domain = await Domain.get(self.job.domain_id)
             self.effective_max_workers, rate_limit = self._throttle_for_recrawl()
 
-            # Reset every previously-known URL for this domain back to pending
-            # so a fresh "Start Audit" always does a full re-audit, not just
-            # whatever the sitemap happens to redeclare. Sitemap-declared URLs
-            # get reset again individually during sitemap parsing below (that's
-            # fine, it's a no-op there) - this specifically covers domains with
-            # no real sitemap, where pages are only ever discovered by
-            # following links: without this, a second crawl of the same domain
-            # only ever re-checked the single fallback seed URL, since every
-            # other page it had already discovered was sitting at
-            # crawl_status="checked" and never got re-queued.
-            await URL.find(URL.domain_id == self.domain.id).update(
-                {"$set": {
-                    "crawl_status": URLCrawlStatus.PENDING.value,
-                    "status_code": None,
-                    "status_category": None,
-                    "response_time_ms": None,
-                    "content_type": None,
-                    "content_length": None,
-                    "error_details": None,
-                }}
-            )
+            await self._reset_domain_urls_for_recrawl()
 
             # Update status
             self.job.status = CrawlJobStatus.RUNNING.value
@@ -271,6 +251,31 @@ class CrawlerEngine:
                 return min(default_workers, throttled_workers), throttled_rate
 
         return default_workers, default_rate
+
+    async def _reset_domain_urls_for_recrawl(self):
+        """Reset every previously-known URL for this domain back to pending.
+
+        A fresh "Start Audit" should always do a full re-audit, not just
+        whatever the sitemap happens to redeclare. Sitemap-declared URLs get
+        reset again individually during sitemap parsing (that's fine, it's a
+        no-op there) - this specifically covers domains with no real sitemap,
+        where pages are only ever discovered by following links: without
+        this, a second crawl of the same domain only ever re-checked the
+        single fallback seed URL, since every other page it had already
+        discovered was sitting at crawl_status="checked" and never got
+        re-queued.
+        """
+        await URL.find(URL.domain_id == self.domain.id).update(
+            {"$set": {
+                "crawl_status": URLCrawlStatus.PENDING.value,
+                "status_code": None,
+                "status_category": None,
+                "response_time_ms": None,
+                "content_type": None,
+                "content_length": None,
+                "error_details": None,
+            }}
+        )
 
     # Status codes treated as "this target is pushing back on us", not a
     # normal client/server error - 403/429 are the obvious ones; 202 is here
