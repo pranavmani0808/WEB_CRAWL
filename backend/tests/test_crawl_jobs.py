@@ -111,6 +111,53 @@ async def test_get_job_detail_returns_domain_progress_and_logs(app_client, regis
     assert [l["message"] for l in body["logs"]] == ["log 0", "log 1", "log 2"]
 
 
+async def test_list_job_urls_returns_slim_rows_with_image_counts(app_client, registered_user):
+    from datetime import datetime
+    from app.models.url import URL
+
+    headers, _ = registered_user
+    job_id = (await app_client.post("/api/crawl", json={"url": "slim.com"}, headers=headers)).json()["job_id"]
+    job = await CrawlJob.get(uuid.UUID(job_id))
+    job.started_at = datetime.utcnow()
+    await job.save()
+
+    url_doc = URL(
+        domain_id=job.domain_id,
+        sitemap_id=uuid.uuid4(),
+        url="https://slim.com/page",
+        url_hash="slim-page",
+        crawl_status="checked",
+        status_code=200,
+        status_category="success",
+        meta_data={"title": "Page", "images": [
+            {"src": "/a.png", "alt": "A"},
+            {"src": "/b.png", "alt": ""},
+            {"src": "/c.png"},
+        ]},
+        seo_issues=[{"type": "warning", "category": "Meta", "issue": "x", "details": "y"}],
+    )
+    await url_doc.insert()
+
+    resp = await app_client.get(f"/api/crawl/jobs/{job_id}/urls", headers=headers)
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["url"] == "https://slim.com/page"
+    assert row["images_count"] == 3
+    assert row["images_missing_alt"] == 2
+    assert row["seo_issues_count"] == 1
+    # The heavy fields must not be in the list payload.
+    assert "metadata" not in row
+    assert "seo_issues" not in row
+
+    detail = await app_client.get(f"/api/crawl/jobs/{job_id}/urls/{row['id']}", headers=headers)
+    assert detail.status_code == 200
+    body = detail.json()
+    assert body["metadata"]["title"] == "Page"
+    assert len(body["seo_issues"]) == 1
+
+
 async def test_cannot_access_another_users_job(app_client, app_client_extra_user, registered_user):
     other_headers = app_client_extra_user
     job_id = (await app_client.post("/api/crawl", json={"url": "private.com"}, headers=other_headers)).json()["job_id"]

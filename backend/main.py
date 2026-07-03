@@ -369,12 +369,86 @@ async def list_job_urls(job_id: str, current_user: User = Depends(get_current_us
     # per-job), so a plain domain_id filter would surface stale results from
     # a previous crawl of the same domain before this job has touched them.
     # Restrict to URLs this job's own run has actually created/updated.
-    urls = await URL.find(
+    #
+    # Project away meta_data/seo_issues server-side: they're ~90% of each
+    # document's weight, the table view never renders them, and shipping
+    # them from Atlas (which sits in a different region than the API) made
+    # this endpoint take >10s on mid-size crawls. The two image counts the
+    # CSV export needs are computed inside the projection, and the full
+    # per-page payload is served by the /urls/{url_id} endpoint below when
+    # the detail modal actually opens.
+    images = {"$ifNull": ["$meta_data.images", []]}
+    rows = await URL.find(
         URL.domain_id == job.domain_id,
         URL.updated_at >= job.started_at,
-    ).sort("url").to_list(None)
+    ).aggregate([
+        {"$project": {
+            "_id": 1,
+            "url": 1,
+            "status_code": 1,
+            "status_category": 1,
+            "response_time_ms": 1,
+            "content_type": 1,
+            "canonical_url": 1,
+            "is_indexable": 1,
+            "crawl_status": 1,
+            "images_count": {"$size": images},
+            "images_missing_alt": {"$size": {"$filter": {
+                "input": images,
+                "as": "img",
+                "cond": {"$eq": [{"$ifNull": ["$$img.alt", ""]}, ""]},
+            }}},
+            "seo_issues_count": {"$size": {"$ifNull": ["$seo_issues", []]}},
+        }},
+        {"$sort": {"url": 1}},
+    ]).to_list()
+
+    def _id_str(v):
+        # Raw aggregation rows bypass Beanie's field decoding, so _id may
+        # come back as a bson Binary (uuid subtype) instead of a UUID.
+        if isinstance(v, uuid.UUID):
+            return str(v)
+        try:
+            return str(uuid.UUID(bytes=bytes(v)))
+        except (TypeError, ValueError):
+            return str(v)
 
     return [{
+        "id": _id_str(r["_id"]),
+        "url": r.get("url"),
+        "status_code": r.get("status_code"),
+        "status_category": r.get("status_category"),
+        "response_time_ms": r.get("response_time_ms"),
+        "content_type": r.get("content_type"),
+        "canonical_url": r.get("canonical_url"),
+        "is_indexable": r.get("is_indexable"),
+        "crawl_status": r.get("crawl_status"),
+        "images_count": r.get("images_count", 0),
+        "images_missing_alt": r.get("images_missing_alt", 0),
+        "seo_issues_count": r.get("seo_issues_count", 0),
+    } for r in rows]
+
+
+@app.get("/api/crawl/jobs/{job_id}/urls/{url_id}", tags=["Crawl"])
+async def get_job_url_detail(job_id: str, url_id: str, current_user: User = Depends(get_current_user)):
+    """Full detail for one audited URL (SEO metadata + issues) - fetched on
+    demand when the page-detail modal opens, so the list endpoint doesn't
+    have to carry this weight for every row."""
+    try:
+        job_uuid = uuid.UUID(job_id)
+        url_uuid = uuid.UUID(url_id)
+    except ValueError:
+        return JSONResponse(status_code=400, content={"message": "Invalid ID format"})
+
+    job = await CrawlJob.get(job_uuid)
+    if not job or job.user_id != current_user.id:
+        return JSONResponse(status_code=404, content={"message": "Job not found"})
+
+    u = await URL.get(url_uuid)
+    if not u or u.domain_id != job.domain_id:
+        return JSONResponse(status_code=404, content={"message": "URL not found"})
+
+    return {
         "id": str(u.id),
         "url": u.url,
         "status_code": u.status_code,
@@ -385,8 +459,8 @@ async def list_job_urls(job_id: str, current_user: User = Depends(get_current_us
         "is_indexable": u.is_indexable,
         "crawl_status": u.crawl_status,
         "metadata": u.meta_data,
-        "seo_issues": u.seo_issues
-    } for u in urls]
+        "seo_issues": u.seo_issues,
+    }
 
 
 @app.get("/api/crawl/jobs/{job_id}/pdf", tags=["Crawl"])

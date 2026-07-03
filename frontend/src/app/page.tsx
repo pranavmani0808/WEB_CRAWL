@@ -80,6 +80,16 @@ interface CrawledUrl {
   canonical_url: string | null;
   is_indexable: boolean | null;
   crawl_status?: string;
+  // Server-computed counts - the full SEO metadata is fetched per-URL via
+  // the detail endpoint only when the page modal opens, keeping this list
+  // payload small enough to refresh cheaply during a live crawl.
+  images_count: number;
+  images_missing_alt: number;
+  seo_issues_count: number;
+}
+
+// Full per-page payload served by /urls/{url_id} for the detail modal.
+interface CrawledUrlDetail extends Omit<CrawledUrl, "images_count" | "images_missing_alt" | "seo_issues_count"> {
   metadata: any;
   seo_issues?: { type: string; category: string; issue: string; details: string }[];
 }
@@ -101,7 +111,8 @@ export default function Dashboard() {
   const [crawledUrls, setCrawledUrls] = useState<CrawledUrl[]>([]);
   const [filterCategory, setFilterCategory] = useState<string>("all");
   const [searchTerm, setSearchTerm] = useState("");
-  const [selectedUrl, setSelectedUrl] = useState<CrawledUrl | null>(null);
+  const [selectedUrl, setSelectedUrl] = useState<CrawledUrlDetail | null>(null);
+  const [loadingUrlId, setLoadingUrlId] = useState<string | null>(null);
   const [showCompare, setShowCompare] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [historyPos, setHistoryPos] = useState<{ top: number; left: number } | null>(null);
@@ -113,8 +124,8 @@ export default function Dashboard() {
     if (crawledUrls.length === 0) return;
     const headers = ["URL", "Status Code", "Status Category", "Response Time (ms)", "Content Type", "Canonical URL", "Indexable", "Images Count", "Missing Alt Images"];
     const rows = crawledUrls.map(u => {
-      const imagesCount = u.metadata?.images?.length || 0;
-      const missingAltCount = u.metadata?.images?.filter((i: any) => !i.alt).length || 0;
+      const imagesCount = u.images_count || 0;
+      const missingAltCount = u.images_missing_alt || 0;
       return [
         `"${u.url.replace(/"/g, '""')}"`,
         u.status_code !== null ? u.status_code : "",
@@ -184,16 +195,30 @@ export default function Dashboard() {
     }
   };
 
-  // Load the audited-URL table separately - this payload includes full SEO
-  // metadata per page and gets large on big crawls, so it's refreshed only
-  // when the checked-count actually moves (see the effect below) rather than
-  // re-downloaded wholesale on every 3s status poll.
+  // Load the audited-URL table separately from the status poll, and only
+  // when the checked-count actually moves (see the effect below).
   const loadJobUrls = async (jobId: string) => {
     try {
       const urlRes = await axios.get(`${API_BASE}/api/crawl/jobs/${jobId}/urls`);
       setCrawledUrls(urlRes.data);
     } catch (err) {
       console.error("Failed to load job URLs", err);
+    }
+  };
+
+  // Fetch one page's full SEO detail (metadata + issues) and open the modal.
+  // This data is deliberately not part of the list payload - it's ~90% of
+  // each URL document's weight and only matters once a row is opened.
+  const openUrlDetail = async (u: CrawledUrl) => {
+    if (!activeJobId) return;
+    setLoadingUrlId(u.id);
+    try {
+      const res = await axios.get(`${API_BASE}/api/crawl/jobs/${activeJobId}/urls/${u.id}`);
+      setSelectedUrl(res.data);
+    } catch (err) {
+      console.error("Failed to load page detail", err);
+    } finally {
+      setLoadingUrlId(null);
     }
   };
 
@@ -1025,11 +1050,14 @@ export default function Dashboard() {
                               <td className="px-6 py-3.5">
                                 {u.crawl_status === "checked" && (
                                   <button
-                                    onClick={() => setSelectedUrl(u)}
+                                    onClick={() => openUrlDetail(u)}
+                                    disabled={loadingUrlId === u.id}
                                     title="View page content"
-                                    className="flex items-center gap-1 rounded-lg border border-slate-800 px-2 py-1 text-[11px] text-slate-400 transition hover:border-indigo-500/40 hover:text-indigo-400"
+                                    className="flex items-center gap-1 rounded-lg border border-slate-800 px-2 py-1 text-[11px] text-slate-400 transition hover:border-indigo-500/40 hover:text-indigo-400 disabled:opacity-50"
                                   >
-                                    <Eye className="h-3 w-3" /> View
+                                    {loadingUrlId === u.id
+                                      ? <RotateCw className="h-3 w-3 animate-spin" />
+                                      : <Eye className="h-3 w-3" />} View
                                   </button>
                                 )}
                               </td>
