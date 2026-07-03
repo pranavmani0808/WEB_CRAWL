@@ -6,7 +6,7 @@ import axios from "axios";
 import {
   Play, RotateCw, Globe,
   Clock, Activity, Check, Terminal, List, Search,
-  Download, LogOut, Eye, Gauge, BarChart3, Sparkles, History
+  Download, LogOut, Eye, Gauge, BarChart3, Sparkles, History, Square
 } from "lucide-react";
 import { restoreSession, clearSession, AuthUser } from "@/lib/auth";
 import Homepage, { PENDING_URL_KEY } from "@/components/Homepage";
@@ -89,6 +89,7 @@ export default function Dashboard() {
   const [urlInput, setUrlInput] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isRetryingAll, setIsRetryingAll] = useState(false);
+  const [isCancelling, setIsCancelling] = useState(false);
   const [jobs, setJobs] = useState<CrawlJob[]>([]);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [jobDetails, setJobDetails] = useState<JobDetails | null>(null);
@@ -168,6 +169,22 @@ export default function Dashboard() {
     }
   };
 
+  // Ask a running/pending job to stop. This just flips the job to "stopping" -
+  // the backend engine notices within a few seconds and settles it into
+  // "cancelled" once the in-flight requests are actually torn down.
+  const cancelCrawl = async (jobId: string) => {
+    setIsCancelling(true);
+    try {
+      await axios.post(`${API_BASE}/api/crawl/jobs/${jobId}/cancel`);
+      await loadJobDetails(jobId);
+      await loadJobs();
+    } catch (err) {
+      console.error("Failed to cancel crawl job", err);
+    } finally {
+      setIsCancelling(false);
+    }
+  };
+
   // Restore session on mount; show the marketing homepage if there isn't one.
   useEffect(() => {
     const restored = restoreSession();
@@ -243,6 +260,8 @@ export default function Dashboard() {
       case "running": return "bg-blue-500/10 text-blue-400 border-blue-500/20 animate-pulse";
       case "failed": return "bg-red-500/10 text-red-400 border-red-500/20";
       case "paused": return "bg-amber-500/10 text-amber-400 border-amber-500/20";
+      case "stopping": return "bg-amber-500/10 text-amber-400 border-amber-500/20 animate-pulse";
+      case "cancelled": return "bg-slate-500/10 text-slate-400 border-slate-500/20";
       default: return "bg-slate-500/10 text-slate-400 border-slate-500/20";
     }
   };
@@ -440,7 +459,7 @@ export default function Dashboard() {
                     <div className="flex items-center space-x-3">
                       <h2 className="text-2xl font-bold text-white tracking-tight">{jobDetails.domain}</h2>
                       <span className={`text-xs px-2.5 py-0.5 rounded-full border ${getStatusColor(jobDetails.status)}`}>
-                        {jobDetails.status}
+                        {jobDetails.status === "stopping" ? "stopping…" : jobDetails.status}
                       </span>
                     </div>
                     <p className="text-sm text-slate-400 mt-1">Audit URL: <a href={jobDetails.url} target="_blank" rel="noreferrer" className="text-indigo-400 hover:underline">{jobDetails.url}</a></p>
@@ -473,6 +492,27 @@ export default function Dashboard() {
                       </div>
                     </div>
                   </div>
+                  {(jobDetails.status === "running" || jobDetails.status === "pending") && (
+                    <button
+                      onClick={() => cancelCrawl(jobDetails.id)}
+                      disabled={isCancelling}
+                      title="Stop this crawl"
+                      className="flex items-center gap-2 rounded-xl border border-red-500/20 bg-red-500/5 px-3 py-3 text-sm font-semibold text-red-400 transition hover:bg-red-500/10 disabled:opacity-50"
+                    >
+                      {isCancelling ? (
+                        <RotateCw className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Square className="h-4 w-4 fill-current" />
+                      )}
+                      <span>Stop</span>
+                    </button>
+                  )}
+                  {jobDetails.status === "stopping" && (
+                    <div className="flex items-center gap-2 rounded-xl border border-amber-500/20 bg-amber-500/5 px-3 py-3 text-sm font-semibold text-amber-400">
+                      <RotateCw className="h-4 w-4 animate-spin" />
+                      <span>Stopping…</span>
+                    </div>
+                  )}
                 </div>
               </div>
 
