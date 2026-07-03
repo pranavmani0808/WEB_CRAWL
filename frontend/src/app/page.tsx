@@ -254,17 +254,31 @@ export default function Dashboard() {
     if (authChecked && user) loadJobs();
   }, [authChecked, user]);
 
+  // Keep the job list (and therefore the Active Crawls switcher) fresh
+  // whenever anything is actually running/pending, independent of whichever
+  // single job's full detail view happens to be open below - this is what
+  // lets you start a second crawl and see both progressing at once.
+  const hasLiveJobs = jobs.some(j => j.status === "running" || j.status === "pending");
   useEffect(() => {
-    if (activeJobId && authChecked && user) {
-      loadJobDetails(activeJobId);
-      // Always poll while a job is active or pending
-      const interval = setInterval(() => {
-        loadJobDetails(activeJobId);
-        loadJobs();
-      }, 3000);
-      return () => clearInterval(interval);
-    }
-  }, [activeJobId]);
+    if (!(authChecked && user && hasLiveJobs)) return;
+    const interval = setInterval(loadJobs, 3000);
+    return () => clearInterval(interval);
+  }, [authChecked, user, hasLiveJobs]);
+
+  // Poll the full detail view (including the potentially large audited-URL
+  // list) only while the currently-viewed job itself is still active - once
+  // it's completed/failed/cancelled the data is final, so continuing to
+  // re-fetch and re-render a large URL table every 3s was pure wasted work
+  // and a real source of UI jank on big crawls.
+  useEffect(() => {
+    if (!(activeJobId && authChecked && user)) return;
+    loadJobDetails(activeJobId);
+    const isTerminal = jobDetails && jobDetails.id === activeJobId &&
+      ["completed", "failed", "cancelled"].includes(jobDetails.status);
+    if (isTerminal) return;
+    const interval = setInterval(() => loadJobDetails(activeJobId), 3000);
+    return () => clearInterval(interval);
+  }, [activeJobId, jobDetails?.status]);
 
   const handleStartCrawl = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -464,6 +478,36 @@ export default function Dashboard() {
       <div className="flex flex-1 overflow-hidden">
         {/* Dashboard Panels */}
         <main className="flex-1 p-8 overflow-y-auto space-y-8">
+          {/* Active Crawls switcher - lets you run several audits at once
+              (the backend already supports concurrent jobs) and jump between
+              watching whichever one you care about, without digging through
+              the full Past Crawls history. */}
+          {hasLiveJobs && (
+            <div className="flex items-center gap-2 overflow-x-auto rounded-xl border border-slate-800 bg-slate-900/50 p-2">
+              <span className="shrink-0 pl-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                Active
+              </span>
+              {jobs.filter(j => j.status === "running" || j.status === "pending").map((j) => (
+                <button
+                  key={j.id}
+                  onClick={() => setActiveJobId(j.id)}
+                  className={`flex shrink-0 items-center gap-2 rounded-lg border px-3 py-1.5 text-xs transition ${
+                    activeJobId === j.id
+                      ? "border-indigo-500/40 bg-indigo-500/10 text-indigo-300"
+                      : "border-slate-800 text-slate-400 hover:border-slate-700 hover:text-slate-200"
+                  }`}
+                >
+                  <span className="relative flex h-1.5 w-1.5">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-400 opacity-75" />
+                    <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-blue-400" />
+                  </span>
+                  <span className="font-medium">{j.domain}</span>
+                  <span className="text-slate-500">{j.total_urls_checked}/{j.total_urls_found || "?"}</span>
+                </button>
+              ))}
+            </div>
+          )}
+
           {/* Retry-all banner for stuck jobs */}
           {hasPendingJobs && (
             <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3 flex items-center justify-between">
