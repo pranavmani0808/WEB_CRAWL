@@ -7,12 +7,13 @@ import axios from "axios";
 import {
   Play, RotateCw, Globe,
   Clock, Activity, Check, Terminal, List, Search,
-  Download, LogOut, Eye, Gauge, BarChart3, Sparkles, History, Square, Trash2, FileText
+  Download, LogOut, Eye, Gauge, BarChart3, Sparkles, History, Square, Trash2, FileText, GitCompare
 } from "lucide-react";
 import { restoreSession, clearSession, AuthUser } from "@/lib/auth";
 import Homepage, { PENDING_URL_KEY } from "@/components/Homepage";
 import CrawlingAnimation from "@/components/CrawlingAnimation";
 import PageDetailModal from "@/components/PageDetailModal";
+import CompareModal from "@/components/CompareModal";
 import AuditPreviewCard from "@/components/AuditPreviewCard";
 
 // Configure base API url
@@ -101,6 +102,7 @@ export default function Dashboard() {
   const [filterCategory, setFilterCategory] = useState<string>("all");
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedUrl, setSelectedUrl] = useState<CrawledUrl | null>(null);
+  const [showCompare, setShowCompare] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [historyPos, setHistoryPos] = useState<{ top: number; left: number } | null>(null);
   const HISTORY_PANEL_WIDTH = 320; // matches the panel's w-80
@@ -941,6 +943,14 @@ export default function Dashboard() {
                         )}
                         <span>PDF</span>
                       </button>
+                      <button
+                        onClick={() => setShowCompare(true)}
+                        className="flex shrink-0 items-center space-x-1.5 rounded-lg border border-slate-700 bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs font-semibold text-white transition focus:outline-none"
+                        title="Compare against a past crawl"
+                      >
+                        <GitCompare className="h-3.5 w-3.5" />
+                        <span>Compare</span>
+                      </button>
                     </div>
                   </div>
 
@@ -1062,6 +1072,9 @@ export default function Dashboard() {
       </div>
 
       {selectedUrl && <PageDetailModal page={selectedUrl} onClose={() => setSelectedUrl(null)} />}
+      {showCompare && jobDetails && (
+        <CompareModal jobId={jobDetails.id} domain={jobDetails.domain} onClose={() => setShowCompare(false)} />
+      )}
     </div>
   );
 }
