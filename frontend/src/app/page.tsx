@@ -329,15 +329,15 @@ export default function Dashboard() {
                 </button>
                 {showHistory && (
                   <>
-                    <div className="fixed inset-0 z-30" onClick={() => setShowHistory(false)} />
-                    <div className="absolute right-0 top-full z-40 mt-2 w-80 max-h-96 overflow-y-auto rounded-xl border border-slate-800 bg-slate-900/95 shadow-2xl shadow-black/40 backdrop-blur-xl">
-                      <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+                    <div className="fixed inset-0 z-30 bg-black/30" onClick={() => setShowHistory(false)} />
+                    <div className="absolute right-0 top-full z-40 mt-2 w-80 max-h-96 overflow-y-auto rounded-xl border border-slate-700 bg-slate-900 shadow-2xl shadow-black/60">
+                      <div className="flex items-center justify-between border-b border-slate-800 bg-slate-900 px-4 py-3">
                         <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">Past Crawls</span>
                         <button onClick={loadJobs} className="text-slate-500 transition hover:text-white" title="Refresh">
                           <RotateCw className="h-3.5 w-3.5" />
                         </button>
                       </div>
-                      <div className="space-y-1 p-2">
+                      <div className="space-y-1 bg-slate-900 p-2">
                         {jobs.map((j) => (
                           <button
                             key={j.id}
