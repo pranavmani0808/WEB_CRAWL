@@ -280,7 +280,7 @@ class CrawlerEngine:
         discovered was sitting at crawl_status="checked" and never got
         re-queued.
         """
-        await URL.find(URL.domain_id == self.domain.id).update(
+        result = await URL.find(URL.domain_id == self.domain.id).update(
             {"$set": {
                 "crawl_status": URLCrawlStatus.PENDING.value,
                 "status_code": None,
@@ -291,6 +291,15 @@ class CrawlerEngine:
                 "error_details": None,
             }}
         )
+
+        # Every URL just re-queued WILL be re-checked this run, so it belongs
+        # in total_urls_found from the start. Without this, a re-crawl of a
+        # sitemap-less domain kept the fallback seed's count (1) while
+        # "checked" climbed into the hundreds of link-discovered pages,
+        # rendering as "1195 of 1 URLs checked" in the UI.
+        reset_count = getattr(result, "matched_count", 0) or 0
+        if reset_count:
+            self.job.total_urls_found = max(self.job.total_urls_found, reset_count)
 
     # Status codes treated as "this target is pushing back on us", not a
     # normal client/server error - 403/429 are the obvious ones; 202 is here
@@ -589,8 +598,12 @@ class CrawlerEngine:
 
                     total_urls += 1
 
-                self.job.total_urls_found = total_urls
-                self.domain.total_urls = total_urls
+                # Never shrink below the re-crawl reset count: on a re-crawl
+                # every previously-known URL is re-checked regardless of
+                # whether the sitemap still declares it (see
+                # _reset_domain_urls_for_recrawl).
+                self.job.total_urls_found = max(total_urls, self.job.total_urls_found)
+                self.domain.total_urls = max(total_urls, self.domain.total_urls or 0)
                 await self.job.save()
                 await self.domain.save()
                 

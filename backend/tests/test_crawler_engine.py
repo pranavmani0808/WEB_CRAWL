@@ -169,6 +169,16 @@ async def test_reset_domain_urls_for_recrawl_clears_previously_checked_urls(mong
     )
     await checked_url.insert()
 
+    second_url = URL(
+        domain_id=domain.id,
+        sitemap_id=uuid.uuid4(),
+        url="https://example.com/b",
+        url_hash="hash-a2",
+        crawl_status=URLCrawlStatus.CHECKED.value,
+        status_code=200,
+    )
+    await second_url.insert()
+
     other_domain_url = URL(
         domain_id=uuid.uuid4(),
         sitemap_id=uuid.uuid4(),
@@ -179,9 +189,17 @@ async def test_reset_domain_urls_for_recrawl_clears_previously_checked_urls(mong
     )
     await other_domain_url.insert()
 
+    from app.models.crawl_job import CrawlJob as CrawlJobModel
+
     engine = CrawlerEngine(uuid.uuid4())
     engine.domain = domain
+    engine.job = CrawlJobModel(domain_id=domain.id, user_id=uuid.uuid4(), total_urls_found=1)
     await engine._reset_domain_urls_for_recrawl()
+
+    # Both re-queued URLs must seed total_urls_found (was 1, the fallback
+    # seed) so the UI never shows "checked" exceeding "found" on
+    # sitemap-less re-crawls.
+    assert engine.job.total_urls_found == 2
 
     refreshed = await URL.get(checked_url.id)
     assert refreshed.crawl_status == URLCrawlStatus.PENDING.value

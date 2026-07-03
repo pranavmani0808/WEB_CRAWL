@@ -717,7 +717,7 @@ export default function Dashboard() {
                 <CrawlingAnimation
                   domain={jobDetails.domain}
                   urlsChecked={jobDetails.progress.total_urls_checked}
-                  urlsFound={jobDetails.progress.total_urls_found}
+                  urlsFound={Math.max(jobDetails.progress.total_urls_found, jobDetails.progress.total_urls_checked)}
                   percent={
                     Math.max(jobDetails.progress.total_urls_found, jobDetails.progress.total_urls_checked) > 0
                       ? Math.round((jobDetails.progress.total_urls_checked / Math.max(jobDetails.progress.total_urls_found, jobDetails.progress.total_urls_checked)) * 100)
