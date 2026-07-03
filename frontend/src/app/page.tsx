@@ -490,7 +490,7 @@ export default function Dashboard() {
                               </span>
                             </div>
                             <div className="mt-1 flex items-center justify-between text-[11px] text-slate-500">
-                              <span>{j.total_urls_checked} / {j.total_urls_found} URLs</span>
+                              <span>{j.total_urls_checked} / {Math.max(j.total_urls_found, j.total_urls_checked)} URLs</span>
                               <span>{new Date(j.created_at).toLocaleDateString()}</span>
                             </div>
 
