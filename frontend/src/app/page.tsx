@@ -6,7 +6,7 @@ import axios from "axios";
 import {
   Play, RotateCw, Globe,
   Clock, Activity, Check, Terminal, List, Search,
-  Download, LogOut, Eye, Gauge, BarChart3, Sparkles
+  Download, LogOut, Eye, Gauge, BarChart3, Sparkles, History
 } from "lucide-react";
 import { restoreSession, clearSession, AuthUser } from "@/lib/auth";
 import Homepage, { PENDING_URL_KEY } from "@/components/Homepage";
@@ -96,6 +96,7 @@ export default function Dashboard() {
   const [filterCategory, setFilterCategory] = useState<string>("all");
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedUrl, setSelectedUrl] = useState<CrawledUrl | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
 
   // Export audited URLs to CSV
   const downloadCsv = () => {
@@ -295,6 +296,57 @@ export default function Dashboard() {
           </div>
           {user && (
             <div className="flex items-center space-x-3 border-l border-slate-800 pl-4">
+              <div className="relative">
+                <button
+                  onClick={() => setShowHistory((v) => !v)}
+                  title="View past crawls"
+                  className={`flex items-center justify-center rounded-lg border p-1.5 transition ${
+                    showHistory
+                      ? "border-indigo-500/40 bg-indigo-500/10 text-indigo-400"
+                      : "border-slate-800 text-slate-400 hover:border-indigo-500/40 hover:text-indigo-400"
+                  }`}
+                >
+                  <History className="h-4 w-4" />
+                </button>
+                {showHistory && (
+                  <>
+                    <div className="fixed inset-0 z-30" onClick={() => setShowHistory(false)} />
+                    <div className="absolute right-0 top-full z-40 mt-2 w-80 max-h-96 overflow-y-auto rounded-xl border border-slate-800 bg-slate-900/95 shadow-2xl shadow-black/40 backdrop-blur-xl">
+                      <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+                        <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">Past Crawls</span>
+                        <button onClick={loadJobs} className="text-slate-500 transition hover:text-white" title="Refresh">
+                          <RotateCw className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                      <div className="space-y-1 p-2">
+                        {jobs.map((j) => (
+                          <button
+                            key={j.id}
+                            onClick={() => { setActiveJobId(j.id); setShowHistory(false); }}
+                            className={`w-full rounded-lg p-2.5 text-left transition ${
+                              activeJobId === j.id ? "bg-slate-800" : "hover:bg-slate-800/60"
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="truncate text-sm font-medium text-white">{j.domain}</span>
+                              <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] ${getStatusColor(j.status)}`}>
+                                {j.status}
+                              </span>
+                            </div>
+                            <div className="mt-1 flex items-center justify-between text-[11px] text-slate-500">
+                              <span>{j.total_urls_checked} / {j.total_urls_found} URLs</span>
+                              <span>{new Date(j.created_at).toLocaleDateString()}</span>
+                            </div>
+                          </button>
+                        ))}
+                        {jobs.length === 0 && (
+                          <div className="py-8 text-center text-xs text-slate-500">No past crawls yet.</div>
+                        )}
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
               <div className="flex items-center gap-2">
                 <div className="flex h-6 w-6 items-center justify-center rounded-full bg-gradient-to-tr from-indigo-500 to-blue-500 text-[10px] font-bold text-white">
                   {user.username?.[0]?.toUpperCase()}
