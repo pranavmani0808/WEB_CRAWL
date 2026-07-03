@@ -1,6 +1,8 @@
+import asyncio
 import logging
 from fastapi import Depends, FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from app.core.config import settings
 from app.core.exceptions import CrawlerException
@@ -64,6 +66,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Compress large JSON responses. The audited-URLs payload (which carries full
+# per-page SEO metadata) is ~600KB uncompressed on a mid-size crawl and
+# compresses ~10x - without this the transfer time dwarfed the query time for
+# anyone not sitting next to the server.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 def _cors_headers(request: Request) -> dict:
     """Return CORS headers so error responses aren't blocked by the browser."""
@@ -286,19 +294,22 @@ async def get_crawl_job(job_id: str, current_user: User = Depends(get_current_us
     if not job or job.user_id != current_user.id:
         return JSONResponse(status_code=404, content={"message": "Job not found"})
 
-    # Fetch domain
-    domain = await Domain.get(job.domain_id)
-
-    # Fetch logs - most recent 200 only. This endpoint is polled every few
+    # Fetch domain, logs and statistics concurrently - these are independent
+    # queries, and the API-to-Atlas round-trip is the dominant cost per query
+    # (the DB lives in a different region than the API), so running them
+    # sequentially tripled this endpoint's latency for no reason. Logs are
+    # capped to the most recent 200: this endpoint is polled every few
     # seconds while a crawl runs, and big crawls generate thousands of
-    # per-URL issue logs; shipping all of them on every poll made the detail
-    # view progressively slower as the crawl went on. Fetch newest-first
-    # (matching the index), then flip back to chronological for the UI.
-    logs = await CrawlLog.find(CrawlLog.crawl_job_id == job_uuid).sort("-timestamp").limit(200).to_list()
+    # per-URL issue logs. Fetch newest-first (matching the index), then flip
+    # back to chronological for the UI.
+    domain, logs, stats = await asyncio.gather(
+        Domain.get(job.domain_id),
+        # _id tiebreaker keeps logs written within the same millisecond in
+        # insertion order (timestamps only have ms precision).
+        CrawlLog.find(CrawlLog.crawl_job_id == job_uuid).sort([("timestamp", -1), ("_id", -1)]).limit(200).to_list(),
+        CrawlStatistics.find_one(CrawlStatistics.crawl_job_id == job_uuid),
+    )
     logs.reverse()
-
-    # Fetch statistics
-    stats = await CrawlStatistics.find_one(CrawlStatistics.crawl_job_id == job_uuid)
 
     return {
         "id": str(job.id),

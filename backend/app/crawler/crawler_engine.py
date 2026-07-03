@@ -97,6 +97,10 @@ class CrawlerEngine:
         self._consecutive_block_signals = 0
         self._backed_off = False
         self._backoff_lock = asyncio.Lock()
+        # Set by _stage_http_checking to a closure that spawns crawl tasks
+        # for link-discovered URLs immediately, instead of leaving them for
+        # the 1s DB polling loop to rediscover - see _extract_and_queue_links.
+        self._enqueue_discovered = None
 
     async def log_event(self, level: str, message: str, event_type: str = None, entity_type: str = None, entity_id: str = None, details: dict = None):
         """Log event to python logger and database `crawl_logs` collection"""
@@ -647,6 +651,21 @@ class CrawlerEngine:
                     await self._crawl_single_url(client, url_to_crawl)
             finally:
                 running_tasks.discard(asyncio.current_task())
+
+        # Let _extract_and_queue_links hand link-discovered URLs straight to
+        # this stage the moment they're inserted. Without this, every
+        # discovery "wave" waited for the next 1s DB poll tick below before
+        # its URLs started crawling, which put a hard floor on how fast a
+        # sitemap-less site (where the entire frontier is link-discovered,
+        # often through deep chains like /page/1 -> /page/2 -> ...) could go.
+        def enqueue_discovered(new_docs):
+            for discovered in new_docs:
+                if discovered.url in active_urls:
+                    continue
+                active_urls.add(discovered.url)
+                new_task = asyncio.create_task(crawl_and_release(discovered))
+                running_tasks.add(new_task)
+        self._enqueue_discovered = enqueue_discovered
 
         # Spawn initial tasks
         for url_obj in urls:
@@ -1261,3 +1280,8 @@ class CrawlerEngine:
                 self._known_url_hashes.update(d.url_hash for d in new_docs)
                 self.job.total_urls_found += len(new_docs)
                 await self.job.save()
+                # Start crawling them right away rather than waiting for the
+                # polling loop's next tick to find them (it still acts as the
+                # fallback if this closure isn't wired up, e.g. in tests).
+                if self._enqueue_discovered:
+                    self._enqueue_discovered(new_docs)

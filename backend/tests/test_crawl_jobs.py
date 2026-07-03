@@ -94,6 +94,23 @@ async def test_cancel_then_delete_job(app_client, registered_user):
     assert await CrawlJob.get(uuid.UUID(job_id)) is None
 
 
+async def test_get_job_detail_returns_domain_progress_and_logs(app_client, registered_user):
+    from app.models.crawl_log import CrawlLog
+
+    headers, _ = registered_user
+    job_id = (await app_client.post("/api/crawl", json={"url": "detail.com"}, headers=headers)).json()["job_id"]
+
+    for i in range(3):
+        await CrawlLog(crawl_job_id=uuid.UUID(job_id), level="info", message=f"log {i}").insert()
+
+    resp = await app_client.get(f"/api/crawl/jobs/{job_id}", headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["domain"] == "detail.com"
+    assert body["status"] == "pending"
+    assert [l["message"] for l in body["logs"]] == ["log 0", "log 1", "log 2"]
+
+
 async def test_cannot_access_another_users_job(app_client, app_client_extra_user, registered_user):
     other_headers = app_client_extra_user
     job_id = (await app_client.post("/api/crawl", json={"url": "private.com"}, headers=other_headers)).json()["job_id"]
