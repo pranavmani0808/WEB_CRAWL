@@ -713,10 +713,16 @@ class CrawlerEngine:
     async def _update_job_progress(self):
         """Recalculate and update database stats on the CrawlJob"""
         async with self.db_lock:
-            # Load stats for checked URLs in this job's domain
+            # Load stats for checked URLs in this job's domain. URLs are stored
+            # per-domain and reused across crawl runs, so this must be scoped
+            # to updated_at >= job.started_at - otherwise re-crawling a domain
+            # pulls in status-code counts left over from previous jobs (e.g. a
+            # job that only actually re-checked 1 URL showing hundreds of
+            # stale 2xx/4xx counts from an earlier run of the same domain).
             checked_urls = await URL.find(
                 URL.domain_id == self.domain.id,
-                URL.crawl_status == URLCrawlStatus.CHECKED.value
+                URL.crawl_status == URLCrawlStatus.CHECKED.value,
+                URL.updated_at >= self.job.started_at
             ).to_list(None)
 
             if not checked_urls:
@@ -769,10 +775,12 @@ class CrawlerEngine:
         """Detect duplication, generate issues reports and populate statistics tables"""
         await self.log_event("info", "Starting Duplication check & Reporting stage", event_type="stage_reporting_started")
 
-        # 1. Fetch checked HTML URLs for duplication checks
+        # 1. Fetch checked HTML URLs for duplication checks - scoped to this
+        # job's run for the same reason as _update_job_progress above.
         checked_urls = await URL.find(
             URL.domain_id == self.domain.id,
-            URL.crawl_status == URLCrawlStatus.CHECKED.value
+            URL.crawl_status == URLCrawlStatus.CHECKED.value,
+            URL.updated_at >= self.job.started_at
         ).to_list(None)
 
         html_results = []
