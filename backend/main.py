@@ -1,7 +1,7 @@
 import logging
 from fastapi import Depends, FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from app.core.config import settings
 from app.core.exceptions import CrawlerException
 from app.core.security import create_access_token, create_refresh_token, get_password_hash, verify_password
@@ -13,7 +13,9 @@ from app.models.url import URL
 from app.models.crawl_log import CrawlLog
 from app.models.crawl_statistics import CrawlStatistics
 from app.models.user import User
+from app.models.report import Report
 from app.workers.tasks import crawl_domain_task
+from app.reports.pdf_generator import generate_crawl_pdf
 import uuid
 from urllib.parse import urlparse
 from pydantic import BaseModel, Field, field_validator
@@ -368,6 +370,39 @@ async def list_job_urls(job_id: str, current_user: User = Depends(get_current_us
         "metadata": u.meta_data,
         "seo_issues": u.seo_issues
     } for u in urls]
+
+
+@app.get("/api/crawl/jobs/{job_id}/pdf", tags=["Crawl"])
+async def download_job_pdf(job_id: str, current_user: User = Depends(get_current_user)):
+    """Generate and download a PDF audit report for a completed crawl job."""
+    try:
+        job_uuid = uuid.UUID(job_id)
+    except ValueError:
+        return JSONResponse(status_code=400, content={"message": "Invalid job ID format"})
+
+    job = await CrawlJob.get(job_uuid)
+    if not job or job.user_id != current_user.id:
+        return JSONResponse(status_code=404, content={"message": "Job not found"})
+
+    domain = await Domain.get(job.domain_id)
+    if not domain:
+        return JSONResponse(status_code=404, content={"message": "Domain not found"})
+
+    urls = await URL.find(
+        URL.domain_id == job.domain_id,
+        URL.updated_at >= job.started_at,
+    ).sort("url").to_list(None)
+
+    category_reports = await Report.find(Report.crawl_job_id == job_uuid).to_list(None)
+
+    pdf_bytes = generate_crawl_pdf(job, domain, urls, category_reports)
+
+    filename = f"{domain.domain}_audit_report.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
 
 
 @app.post("/api/crawl/jobs/{job_id}/retry", tags=["Crawl"])
