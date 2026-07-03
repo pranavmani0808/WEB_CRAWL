@@ -101,7 +101,8 @@ export default function Dashboard() {
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedUrl, setSelectedUrl] = useState<CrawledUrl | null>(null);
   const [showHistory, setShowHistory] = useState(false);
-  const [historyPos, setHistoryPos] = useState<{ top: number; right: number } | null>(null);
+  const [historyPos, setHistoryPos] = useState<{ top: number; left: number } | null>(null);
+  const HISTORY_PANEL_WIDTH = 320; // matches the panel's w-80
   const historyBtnRef = useRef<HTMLButtonElement>(null);
 
   // Export audited URLs to CSV
@@ -336,34 +337,40 @@ export default function Dashboard() {
   return (
     <div className="flex h-full min-h-screen flex-col bg-slate-950 text-slate-100 font-sans">
       {/* Header */}
-      <header className="relative flex items-center justify-between border-b border-slate-900 bg-slate-900/40 px-6 py-4 backdrop-blur-xl">
+      <header className="relative flex items-center justify-between gap-3 border-b border-slate-900 bg-slate-900/40 px-4 py-3 backdrop-blur-xl sm:px-6 sm:py-4">
         <div className="pointer-events-none absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-indigo-500/40 to-transparent" />
-        <div className="flex items-center space-x-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 shadow-lg shadow-indigo-500/25">
-            <Globe className="h-5 w-5 text-white" />
+        <div className="flex min-w-0 items-center space-x-3">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 shadow-lg shadow-indigo-500/25 sm:h-10 sm:w-10">
+            <Globe className="h-4.5 w-4.5 text-white sm:h-5 sm:w-5" />
           </div>
-          <div>
-            <h1 className="text-lg font-bold tracking-tight text-white">Popz AI Crawl</h1>
-            <p className="text-xs text-slate-400">Sitemap-Based Domain Inventory Auditing</p>
+          <div className="min-w-0">
+            <h1 className="truncate text-base font-bold tracking-tight text-white sm:text-lg">Popz AI Crawl</h1>
+            <p className="hidden truncate text-xs text-slate-400 sm:block">Sitemap-Based Domain Inventory Auditing</p>
           </div>
         </div>
-        <div className="flex items-center space-x-4">
-          <div className="flex items-center space-x-2 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1">
+        <div className="flex shrink-0 items-center space-x-2 sm:space-x-4">
+          <div className="flex items-center space-x-2 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-1 sm:px-3">
             <span className="relative flex h-2 w-2">
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
               <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500"></span>
             </span>
-            <span className="text-xs font-medium text-emerald-400">Backend Connected</span>
+            <span className="hidden text-xs font-medium text-emerald-400 sm:inline">Backend Connected</span>
           </div>
           {user && (
-            <div className="flex items-center space-x-3 border-l border-slate-800 pl-4">
+            <div className="flex items-center space-x-2 border-l border-slate-800 pl-2 sm:space-x-3 sm:pl-4">
               <div className="relative">
                 <button
                   ref={historyBtnRef}
                   onClick={() => {
                     if (!showHistory && historyBtnRef.current) {
                       const rect = historyBtnRef.current.getBoundingClientRect();
-                      setHistoryPos({ top: rect.bottom + 8, right: window.innerWidth - rect.right });
+                      // Right-align the panel's right edge with the button's, then
+                      // clamp so it can never spill past either screen edge on
+                      // narrow viewports (a right-anchored CSS "right" offset alone
+                      // isn't enough - it can still push the left edge negative).
+                      const desiredLeft = rect.right - HISTORY_PANEL_WIDTH;
+                      const clampedLeft = Math.max(8, Math.min(desiredLeft, window.innerWidth - HISTORY_PANEL_WIDTH - 8));
+                      setHistoryPos({ top: rect.bottom + 8, left: clampedLeft });
                     }
                     setShowHistory((v) => !v);
                   }}
@@ -385,8 +392,8 @@ export default function Dashboard() {
                         stacking context. */}
                     <div className="fixed inset-0 z-[100] bg-black/30" onClick={() => setShowHistory(false)} />
                     <div
-                      style={{ position: "fixed", top: historyPos.top, right: historyPos.right }}
-                      className="z-[101] w-80 max-h-96 overflow-y-auto rounded-xl border border-slate-700 bg-slate-900 shadow-2xl shadow-black/60"
+                      style={{ position: "fixed", top: historyPos.top, left: historyPos.left }}
+                      className="z-[101] w-80 max-w-[calc(100vw-2rem)] max-h-96 overflow-y-auto rounded-xl border border-slate-700 bg-slate-900 shadow-2xl shadow-black/60"
                     >
                       <div className="flex items-center justify-between border-b border-slate-800 bg-slate-900 px-4 py-3">
                         <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">Past Crawls</span>
@@ -456,18 +463,18 @@ export default function Dashboard() {
                 )}
               </div>
               <div className="flex items-center gap-2">
-                <div className="flex h-6 w-6 items-center justify-center rounded-full bg-gradient-to-tr from-indigo-500 to-blue-500 text-[10px] font-bold text-white">
+                <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-gradient-to-tr from-indigo-500 to-blue-500 text-[10px] font-bold text-white">
                   {user.username?.[0]?.toUpperCase()}
                 </div>
-                <span className="text-xs font-medium text-slate-300">{user.username}</span>
+                <span className="hidden max-w-[8rem] truncate text-xs font-medium text-slate-300 sm:inline">{user.username}</span>
               </div>
               <button
                 onClick={handleLogout}
-                className="flex items-center space-x-1 rounded-lg border border-slate-800 px-2 py-1 text-xs text-slate-400 transition hover:border-red-500/30 hover:text-red-400"
+                className="flex items-center space-x-1 rounded-lg border border-slate-800 px-2 py-1.5 text-xs text-slate-400 transition hover:border-red-500/30 hover:text-red-400 sm:py-1"
                 title="Log out"
               >
                 <LogOut className="h-3.5 w-3.5" />
-                <span>Log out</span>
+                <span className="hidden sm:inline">Log out</span>
               </button>
             </div>
           )}
@@ -477,7 +484,7 @@ export default function Dashboard() {
       {/* Main Content Area */}
       <div className="flex flex-1 overflow-hidden">
         {/* Dashboard Panels */}
-        <main className="flex-1 p-8 overflow-y-auto space-y-8">
+        <main className="flex-1 space-y-6 overflow-y-auto p-4 sm:space-y-8 sm:p-6 lg:p-8">
           {/* Active Crawls switcher - lets you run several audits at once
               (the backend already supports concurrent jobs) and jump between
               watching whichever one you care about, without digging through
@@ -570,23 +577,23 @@ export default function Dashboard() {
 
               {/* Job summary section */}
               <div className="flex flex-col md:flex-row md:items-center justify-between border-b border-slate-900 pb-6 gap-4">
-                <div className="flex items-center gap-4">
-                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-slate-800 bg-gradient-to-tr from-slate-900 to-slate-800 text-indigo-400 shadow-lg shadow-black/20">
-                    <Globe className="h-5 w-5" />
+                <div className="flex min-w-0 items-center gap-3 sm:gap-4">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-slate-800 bg-gradient-to-tr from-slate-900 to-slate-800 text-indigo-400 shadow-lg shadow-black/20 sm:h-12 sm:w-12">
+                    <Globe className="h-4.5 w-4.5 sm:h-5 sm:w-5" />
                   </div>
-                  <div>
-                    <div className="flex items-center space-x-3">
-                      <h2 className="text-2xl font-bold text-white tracking-tight">{jobDetails.domain}</h2>
-                      <span className={`text-xs px-2.5 py-0.5 rounded-full border ${getStatusColor(jobDetails.status)}`}>
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+                      <h2 className="truncate text-xl font-bold text-white tracking-tight sm:text-2xl">{jobDetails.domain}</h2>
+                      <span className={`shrink-0 text-xs px-2.5 py-0.5 rounded-full border ${getStatusColor(jobDetails.status)}`}>
                         {jobDetails.status === "stopping" ? "stopping…" : jobDetails.status}
                       </span>
                     </div>
-                    <p className="text-sm text-slate-400 mt-1">Audit URL: <a href={jobDetails.url} target="_blank" rel="noreferrer" className="text-indigo-400 hover:underline">{jobDetails.url}</a></p>
+                    <p className="truncate text-sm text-slate-400 mt-1">Audit URL: <a href={jobDetails.url} target="_blank" rel="noreferrer" className="text-indigo-400 hover:underline">{jobDetails.url}</a></p>
                   </div>
                 </div>
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center gap-3">
                   <div className="bg-slate-900/60 border border-slate-800 p-3 rounded-xl flex items-center gap-3">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-500/10 text-indigo-400">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-indigo-500/10 text-indigo-400">
                       <Clock className="h-4 w-4" />
                     </div>
                     <div>
@@ -601,7 +608,7 @@ export default function Dashboard() {
                     </div>
                   </div>
                   <div className="bg-slate-900/60 border border-slate-800 p-3 rounded-xl flex items-center gap-3">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-500/10 text-indigo-400">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-indigo-500/10 text-indigo-400">
                       <Gauge className="h-4 w-4" />
                     </div>
                     <div>
@@ -860,22 +867,22 @@ export default function Dashboard() {
                 {jobDetails.status === "completed" && (
                 <div className="lg:col-span-2 bg-slate-900/50 border border-slate-900 rounded-2xl flex flex-col h-96 overflow-hidden shadow-xl shadow-black/10">
                   {/* Filter Toolbar */}
-                  <div className="border-b border-slate-900 px-6 py-4 bg-slate-900/40 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                  <div className="border-b border-slate-900 px-4 py-4 sm:px-6 bg-slate-900/40 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                     <div className="flex items-center space-x-2">
-                      <List className="h-4 w-4 text-indigo-400" />
+                      <List className="h-4 w-4 shrink-0 text-indigo-400" />
                       <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">Audited Sitemap URLs</span>
                       <span className="rounded-full bg-slate-800 px-2 py-0.5 text-[10px] font-semibold text-slate-400">{filteredUrls.length}</span>
                     </div>
 
-                    <div className="flex items-center space-x-2">
-                      <div className="relative">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="relative flex-1 min-w-[140px]">
                         <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-slate-500" />
                         <input
                           type="text"
                           placeholder="Search URL..."
                           value={searchTerm}
                           onChange={(e) => setSearchTerm(e.target.value)}
-                          className="pl-8 pr-3 py-1.5 rounded-lg border border-slate-800 bg-slate-950 text-xs text-white placeholder-slate-500 transition focus:outline-none focus:border-indigo-500"
+                          className="w-full pl-8 pr-3 py-1.5 rounded-lg border border-slate-800 bg-slate-950 text-xs text-white placeholder-slate-500 transition focus:outline-none focus:border-indigo-500"
                         />
                       </div>
                       <select
@@ -892,7 +899,7 @@ export default function Dashboard() {
                       </select>
                       <button
                         onClick={downloadCsv}
-                        className="flex items-center space-x-1.5 rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 hover:shadow-lg hover:shadow-indigo-600/25 px-3 py-1.5 text-xs font-semibold text-white transition focus:outline-none"
+                        className="flex shrink-0 items-center space-x-1.5 rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 hover:shadow-lg hover:shadow-indigo-600/25 px-3 py-1.5 text-xs font-semibold text-white transition focus:outline-none"
                         title="Download CSV report"
                       >
                         <Download className="h-3.5 w-3.5" />

@@ -80,19 +80,19 @@ export default function AuditPreviewCard() {
       </div>
 
       {/* Floating speed badge */}
-      <div className="absolute -right-4 -top-4 rounded-xl border border-slate-800 bg-slate-900 p-3 shadow-xl shadow-black/40">
+      <div className="absolute -right-2 -top-2 rounded-xl border border-slate-800 bg-slate-900 p-2.5 shadow-xl shadow-black/40 sm:-right-4 sm:-top-4 sm:p-3">
         <div className="flex items-center gap-1.5 text-[10px] text-slate-400">
           <Clock className="h-3 w-3" /> Speed
         </div>
-        <div className="mt-1 text-lg font-bold text-white">4.2 <span className="text-xs font-normal text-slate-500">req/s</span></div>
+        <div className="mt-1 text-base font-bold text-white sm:text-lg">4.2 <span className="text-xs font-normal text-slate-500">req/s</span></div>
       </div>
 
       {/* Floating URL count badge */}
-      <div className="absolute -bottom-5 -left-5 rounded-xl border border-slate-800 bg-slate-900 p-3 shadow-xl shadow-black/40">
+      <div className="absolute -bottom-3 -left-2 rounded-xl border border-slate-800 bg-slate-900 p-2.5 shadow-xl shadow-black/40 sm:-bottom-5 sm:-left-5 sm:p-3">
         <div className="flex items-center gap-1.5 text-[10px] text-slate-400">
           <ShieldCheck className="h-3 w-3" /> URLs Discovered
         </div>
-        <div className="mt-1 text-lg font-bold text-white">3,482</div>
+        <div className="mt-1 text-base font-bold text-white sm:text-lg">3,482</div>
       </div>
     </div>
   );
