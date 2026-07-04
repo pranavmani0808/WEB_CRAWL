@@ -905,6 +905,25 @@ class CrawlerEngine:
             url_obj.last_checked_at = datetime.utcnow()
             await url_obj.save()
 
+            # Queue discovered internal links before dropping the parse tree.
+            if soup:
+                await self._extract_and_queue_links(soup, url_obj.url)
+
+            # Release everything heavy this task built. The sitemap-seeded URL
+            # objects are held in the `urls` list for the entire crawl (see
+            # _stage_http_checking), so anything left attached to url_obj here
+            # stays resident until the whole crawl ends - full SEO metadata
+            # (every link + image) for every page. On a several-thousand-page
+            # site with heavy pages that accumulation alone exhausted the 1GB
+            # worker around page ~1000. The DB already holds the real values;
+            # these in-memory copies are dead weight.
+            soup = None
+            seo_data = None
+            issues = None
+            url_obj.meta_data = {}
+            url_obj.seo_issues = []
+            url_obj.redirect_chain = []
+
             # self.job/self.domain are shared across all concurrent tasks, so the
             # increment is kept under the lock. Persisting to Mongo on every
             # single page added ~2 Atlas round-trips (hundreds of ms each) to
@@ -914,10 +933,6 @@ class CrawlerEngine:
             async with self.db_lock:
                 self.job.total_urls_checked += 1
                 self.domain.crawled_urls += 1
-
-            # Queue discovered internal links
-            if soup:
-                await self._extract_and_queue_links(soup, url_obj.url)
 
         except httpx.TimeoutException as e:
             url_obj.crawl_status = URLCrawlStatus.FAILED.value
@@ -1052,11 +1067,61 @@ class CrawlerEngine:
 
         # 1. Fetch checked HTML URLs for duplication checks - scoped to this
         # job's run for the same reason as _update_job_progress above.
-        checked_urls = await URL.find(
+        #
+        # Project each doc down to only the fields the whole reporting stage
+        # actually uses. Loading full documents here meant pulling every
+        # page's complete SEO metadata (all links + images) into memory at
+        # once - on a several-thousand-page site that end-of-crawl spike was
+        # its own OOM even after the per-page accumulation fix. meta_data is
+        # slimmed to just the four fields duplication detection reads.
+        from types import SimpleNamespace
+        rows = await URL.find(
             URL.domain_id == self.domain.id,
             URL.crawl_status == URLCrawlStatus.CHECKED.value,
             URL.updated_at >= self.job.started_at
-        ).to_list(None)
+        ).aggregate([
+            {"$project": {
+                "url": 1,
+                "status_code": 1,
+                "status_category": 1,
+                "response_time_ms": 1,
+                "content_type": 1,
+                "content_length": 1,
+                "subdomain_id": 1,
+                "m_title": "$meta_data.title",
+                "m_desc": "$meta_data.meta_description",
+                "m_h1": "$meta_data.h1",
+                "m_wc": "$meta_data.word_count",
+            }},
+        ]).to_list()
+
+        def _row_id(v):
+            if isinstance(v, uuid.UUID):
+                return v
+            try:
+                return uuid.UUID(bytes=bytes(v))
+            except (TypeError, ValueError):
+                return v
+
+        checked_urls = [
+            SimpleNamespace(
+                id=_row_id(r["_id"]),
+                url=r.get("url"),
+                status_code=r.get("status_code"),
+                status_category=r.get("status_category"),
+                response_time_ms=r.get("response_time_ms"),
+                content_type=r.get("content_type"),
+                content_length=r.get("content_length"),
+                subdomain_id=r.get("subdomain_id"),
+                meta_data={
+                    "title": r.get("m_title"),
+                    "meta_description": r.get("m_desc"),
+                    "h1": r.get("m_h1"),
+                    "word_count": r.get("m_wc"),
+                },
+            )
+            for r in rows
+        ]
 
         html_results = []
         for url_obj in checked_urls:
