@@ -573,10 +573,16 @@ class CrawlerEngine:
                         except:
                             pass
 
-                    url_obj = await URL.find_one(
-                        URL.domain_id == self.domain.id,
-                        URL.url_hash == url_clean_hash
-                    )
+                    # Match on url_hash alone: the collection's unique index is
+                    # on url_hash (which already encodes the full URL incl.
+                    # host), NOT on (domain_id, url_hash). Scoping this lookup
+                    # to domain_id could miss a row that exists under a
+                    # duplicate domain record (e.g. "https://Ahrefs.com" vs
+                    # "https://ahrefs.com"), and then the insert below would
+                    # crash the entire crawl with an E11000 duplicate-key
+                    # error - exactly what killed the sitemap-less fallback
+                    # path on re-crawls.
+                    url_obj = await URL.find_one(URL.url_hash == url_clean_hash)
 
                     if not url_obj:
                         url_obj = URL(
@@ -590,8 +596,23 @@ class CrawlerEngine:
                             sitemap_priority=priority,
                             crawl_status=URLCrawlStatus.PENDING.value
                         )
-                        await url_obj.insert()
+                        try:
+                            await url_obj.insert()
+                        except Exception:
+                            # Lost a race (another task inserted the same hash)
+                            # or a stale index read - re-fetch and update
+                            # instead of failing the whole crawl.
+                            existing = await URL.find_one(URL.url_hash == url_clean_hash)
+                            if existing is None:
+                                raise
+                            url_obj = existing
+                            url_obj.domain_id = self.domain.id
+                            url_obj.subdomain_id = url_sub_id
+                            url_obj.sitemap_id = smap.id
+                            url_obj.crawl_status = URLCrawlStatus.PENDING.value
+                            await url_obj.save()
                     else:
+                        url_obj.domain_id = self.domain.id
                         url_obj.subdomain_id = url_sub_id
                         url_obj.sitemap_id = smap.id
                         url_obj.sitemap_last_modified = lastmod_date

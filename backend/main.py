@@ -222,12 +222,16 @@ async def start_crawl_endpoint(req: CrawlRequest, current_user: User = Depends(g
         url = 'https://' + url
 
     parsed = urlparse(url)
-    domain_name = parsed.netloc or parsed.path.split('/')[0]
+    # Hostnames are case-insensitive (DNS), so lowercase the host when
+    # normalizing. Without this, "Ahrefs.com" and "ahrefs.com" created two
+    # separate domain records for the same site - which then collided on the
+    # global-unique url_hash index and crashed re-crawls.
+    domain_name = (parsed.netloc or parsed.path.split('/')[0]).lower()
 
     user_id = current_user.id
 
     # Get or create Domain
-    normalized_url = f"{parsed.scheme}://{domain_name}"
+    normalized_url = f"{parsed.scheme.lower()}://{domain_name}"
     domain = await Domain.find_one(Domain.normalized_url == normalized_url)
 
     if not domain:
