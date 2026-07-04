@@ -72,6 +72,75 @@ async def _dispatch_due_schedules() -> list:
     return dispatched
 
 
+STALE_JOB_TIMEOUT = timedelta(minutes=10)
+
+
+async def _reap_stale_jobs() -> list:
+    """Fail any running/stopping job whose heartbeat has gone silent.
+
+    A worker process killed mid-crawl (OOM SIGKILL, deploy restart) can't
+    mark its own job failed, so without this the job sits in "running"
+    forever - the UI polls it endlessly and Retry is never offered. In-flight
+    URLs are reset to pending so a retry re-checks them cleanly.
+    Returns the reaped job IDs (as strings).
+    """
+    from app.models.crawl_job import CrawlJob
+    from app.models.crawl_log import CrawlLog
+    from app.models.url import URL
+
+    now = datetime.utcnow()
+    live_jobs = await CrawlJob.find({"status": {"$in": ["running", "stopping"]}}).to_list()
+
+    reaped = []
+    for job in live_jobs:
+        heartbeat = job.last_activity_at or job.started_at or job.created_at
+        if heartbeat and (now - heartbeat) < STALE_JOB_TIMEOUT:
+            continue
+
+        job.status = "failed"
+        job.completed_at = now
+        await job.save()
+
+        await URL.find(
+            URL.domain_id == job.domain_id,
+            URL.crawl_status == "checking",
+        ).update({"$set": {"crawl_status": "pending"}})
+
+        await CrawlLog(
+            crawl_job_id=job.id,
+            level="error",
+            message=(
+                "Crawl marked failed: no progress for over "
+                f"{int(STALE_JOB_TIMEOUT.total_seconds() // 60)} minutes. The crawl worker likely "
+                "ran out of memory or was restarted mid-crawl. Use Retry to re-run this audit."
+            ),
+            event_type="crawl_reaped",
+        ).insert()
+
+        reaped.append(str(job.id))
+        logger.warning(f"Reaped stale job {job.id} (last activity: {heartbeat})")
+
+    return reaped
+
+
+@celery_app.task(name="app.workers.tasks.reap_stale_jobs")
+def reap_stale_jobs():
+    """Beat-invoked: fail jobs whose worker died without marking them."""
+    async def _run():
+        await init_db()
+        try:
+            return await _reap_stale_jobs()
+        finally:
+            await close_db()
+
+    try:
+        reaped = asyncio.run(_run())
+        return {"status": "success", "reaped": reaped}
+    except Exception as e:
+        logger.exception(f"reap_stale_jobs failed: {e}")
+        return {"status": "failed", "error": str(e)}
+
+
 @celery_app.task(name="app.workers.tasks.dispatch_due_schedules")
 def dispatch_due_schedules():
     """Beat-invoked: find due CrawlSchedules and start crawls for them."""

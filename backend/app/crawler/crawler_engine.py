@@ -159,6 +159,7 @@ class CrawlerEngine:
             # Update status
             self.job.status = CrawlJobStatus.RUNNING.value
             self.job.started_at = datetime.utcnow()
+            self.job.last_activity_at = datetime.utcnow()
             self.domain.status = DomainStatus.CRAWLING.value
             self.domain.first_crawl_at = self.domain.first_crawl_at or datetime.utcnow()
             await self.job.save()
@@ -619,6 +620,7 @@ class CrawlerEngine:
                 # _reset_domain_urls_for_recrawl).
                 self.job.total_urls_found = max(total_urls, self.job.total_urls_found)
                 self.domain.total_urls = max(total_urls, self.domain.total_urls or 0)
+                self.job.last_activity_at = datetime.utcnow()
                 await self.job.save()
                 await self.domain.save()
                 
@@ -789,7 +791,19 @@ class CrawlerEngine:
             seo_data = None
             issues = []
             soup = None
-            if "text/html" in url_obj.content_type:
+            oversized = len(response.content) > settings.CRAWLER_MAX_PARSE_BYTES
+            if oversized:
+                # Status/headers are already recorded above - just skip the
+                # HTML parse. A soup of a multi-MB page costs ~10x its size
+                # in RAM, and with max_workers pages in flight at once that
+                # spike is exactly what OOM-killed the worker on heavy sites.
+                await self.log_event(
+                    "warning",
+                    f"Skipping content audit for {url_obj.url} - page is "
+                    f"{len(response.content) // 1024}KB (limit {settings.CRAWLER_MAX_PARSE_BYTES // 1024}KB)",
+                    event_type="page_too_large", entity_type="url", entity_id=str(url_obj.id),
+                )
+            if "text/html" in url_obj.content_type and not oversized:
                 html_content = response.text
                 try:
                     # HTML parsing + tag walking is CPU-bound and was running
@@ -1001,6 +1015,7 @@ class CrawlerEngine:
             # self.job.total_urls_checked and self.domain.crawled_urls are kept
             # up to date in-memory per-page (see _crawl_single_url) and only
             # flushed to Mongo here, periodically, instead of on every page.
+            self.job.last_activity_at = datetime.utcnow()
             await self.job.save()
             await self.domain.save()
 

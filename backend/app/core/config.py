@@ -43,7 +43,15 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
 
     # Crawler Settings
-    CRAWLER_MAX_WORKERS: int = 32
+    # 16 concurrent fetches saturates the 25 req/s rate cap at typical
+    # response times while halving peak memory - 32 workers all holding a
+    # parsed copy of a heavy page at once is what OOM-killed the 1GB worker
+    # on ahrefs.com (SIGKILL, job stuck "running" forever).
+    CRAWLER_MAX_WORKERS: int = 16
+
+    # Pages larger than this are status-checked but not HTML-parsed; a soup
+    # of a multi-MB page costs ~10x its size in RAM, times N workers.
+    CRAWLER_MAX_PARSE_BYTES: int = 1_500_000
     CRAWLER_TIMEOUT_SECONDS: int = 30
     CRAWLER_RESPECT_ROBOTS_TXT: bool = True
     CRAWLER_FOLLOW_REDIRECTS: bool = True

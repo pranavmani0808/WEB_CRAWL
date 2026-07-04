@@ -36,6 +36,13 @@ celery_app.conf.beat_schedule = {
         "task": "app.workers.tasks.dispatch_due_schedules",
         "schedule": 300.0,
     },
+    # Fail jobs whose worker died without marking them (OOM kill, restart) -
+    # see reap_stale_jobs. Offset from the dispatcher so the two Beat tasks
+    # don't always hit the DB at the same instant.
+    "reap-stale-crawl-jobs": {
+        "task": "app.workers.tasks.reap_stale_jobs",
+        "schedule": 290.0,
+    },
 }
 
 # Discover tasks from app.workers.tasks

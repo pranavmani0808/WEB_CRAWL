@@ -53,6 +53,10 @@ class CrawlJob(Document):
     started_at: datetime = Field(default_factory=datetime.utcnow)
     completed_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    # Heartbeat, refreshed by the engine as the crawl progresses. The Beat
+    # reaper fails any running job whose heartbeat goes silent - a worker
+    # killed mid-crawl (e.g. OOM SIGKILL) can't mark its own job failed.
+    last_activity_at: Optional[datetime] = None
 
     # Metadata
     meta_data: dict = {}
