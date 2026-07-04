@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     CRAWLER_RESPECT_ROBOTS_TXT: bool = True
     CRAWLER_FOLLOW_REDIRECTS: bool = True
 
+    # JavaScript rendering (headless Chromium for SPA pages)
+    JS_RENDERING_ENABLED: bool = True
+    JS_RENDER_MAX_PAGES: int = 80
+    JS_RENDER_TIMEOUT_MS: int = 20000
+
     # Sitemap Discovery & Parsing
     SITEMAP_DISCOVERY_TIMEOUT: int = 10
     SITEMAP_MAX_DEPTH: int = 10

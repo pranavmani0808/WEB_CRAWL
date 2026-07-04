@@ -25,10 +25,12 @@ from app.models.crawl_log import CrawlLog
 from app.models.crawl_statistics import CrawlStatistics
 from app.models.report import Report
 from app.models.url_snapshot import UrlSnapshot
+from app.core.config import settings
 from app.crawler.rate_limiter import RateLimiter
 from app.crawler.seo_extractor import SEOExtractor
 from app.crawler.sitemap_parser import SitemapParser
 from app.crawler.issue_detector import IssueDetector
+from app.crawler.js_renderer import JsRenderer, looks_js_rendered
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +103,10 @@ class CrawlerEngine:
         # for link-discovered URLs immediately, instead of leaving them for
         # the 1s DB polling loop to rediscover - see _extract_and_queue_links.
         self._enqueue_discovered = None
+        # Headless-browser renderer for SPA pages, created in execute() when
+        # enabled. Lazy: Chromium only actually launches if a page's raw
+        # HTML looks like an empty JS app shell (see _crawl_single_url).
+        self.js_renderer = None
 
     async def log_event(self, level: str, message: str, event_type: str = None, entity_type: str = None, entity_id: str = None, details: dict = None):
         """Log event to python logger and database `crawl_logs` collection"""
@@ -186,6 +192,11 @@ class CrawlerEngine:
                 self.sitemap_parser = SitemapParser(client, self.domain.domain, timeout=self.job.timeout_seconds)
                 self.rate_limiter = RateLimiter(requests_per_second=rate_limit)
                 self.issue_detector = IssueDetector()
+                if settings.JS_RENDERING_ENABLED:
+                    self.js_renderer = JsRenderer(
+                        max_pages=settings.JS_RENDER_MAX_PAGES,
+                        timeout_ms=settings.JS_RENDER_TIMEOUT_MS,
+                    )
 
                 # Stage 1: Domain Validation
                 await self._stage_domain_validation()
@@ -238,6 +249,10 @@ class CrawlerEngine:
                 self.domain.status = DomainStatus.FAILED.value
                 await self.domain.save()
             await self.log_event("error", f"Crawl failed: {str(e)}", event_type="crawl_failed", details={"error": str(e)})
+
+        finally:
+            if self.js_renderer:
+                await self.js_renderer.close()
 
     def _throttle_for_recrawl(self) -> tuple:
         """Scale down concurrency/rate if this domain was crawled recently.
@@ -784,6 +799,25 @@ class CrawlerEngine:
                     seo_data, soup = await asyncio.to_thread(
                         SEOExtractor.extract_all, html_content, url_obj.url, self.domain.domain, response_time_ms
                     )
+
+                    # Client-rendered app shell? Escalate to headless
+                    # Chromium and re-run extraction on the rendered DOM so
+                    # SPAs get audited on their real content (and their
+                    # links actually get discovered) instead of an empty
+                    # <div id="root">.
+                    if self.js_renderer and looks_js_rendered(html_content, seo_data.get('word_count', 0)):
+                        rendered_html = await self.js_renderer.render(url_obj.url)
+                        if rendered_html:
+                            seo_data, soup = await asyncio.to_thread(
+                                SEOExtractor.extract_all, rendered_html, url_obj.url, self.domain.domain, response_time_ms
+                            )
+                            seo_data['js_rendered'] = True
+                            await self.log_event(
+                                "info",
+                                f"Rendered {url_obj.url} with headless browser (client-side app detected)",
+                                event_type="js_rendered", entity_type="url", entity_id=str(url_obj.id),
+                            )
+
                     issues = self.issue_detector.detect_issues(seo_data)
                 except Exception as e:
                     logger.error(f"Error parsing HTML for {url_obj.url}: {e}")

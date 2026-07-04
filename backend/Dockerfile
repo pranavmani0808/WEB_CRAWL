@@ -15,6 +15,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Headless Chromium for JS-rendered (SPA) page audits. --with-deps pulls in
+# the shared libraries chromium needs on slim-bookworm. Only the worker
+# actually launches it; the api/beat services just carry the image weight.
+RUN playwright install --with-deps chromium \
+    && rm -rf /var/lib/apt/lists/*
+
 # Copy application code
 COPY . .
 
