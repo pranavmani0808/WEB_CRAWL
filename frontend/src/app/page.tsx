@@ -7,13 +7,14 @@ import axios from "axios";
 import {
   Play, RotateCw, Globe,
   Clock, Activity, Check, Terminal, List, Search,
-  Download, LogOut, Eye, Gauge, BarChart3, Sparkles, History, Square, Trash2, FileText, GitCompare
+  Download, LogOut, Eye, Gauge, BarChart3, Sparkles, History, Square, Trash2, FileText, GitCompare, CalendarClock
 } from "lucide-react";
 import { restoreSession, clearSession, AuthUser } from "@/lib/auth";
 import Homepage, { PENDING_URL_KEY } from "@/components/Homepage";
 import CrawlingAnimation from "@/components/CrawlingAnimation";
 import PageDetailModal from "@/components/PageDetailModal";
 import CompareModal from "@/components/CompareModal";
+import ScheduleModal from "@/components/ScheduleModal";
 import AuditPreviewCard from "@/components/AuditPreviewCard";
 
 // Configure base API url
@@ -114,6 +115,7 @@ export default function Dashboard() {
   const [selectedUrl, setSelectedUrl] = useState<CrawledUrlDetail | null>(null);
   const [loadingUrlId, setLoadingUrlId] = useState<string | null>(null);
   const [showCompare, setShowCompare] = useState(false);
+  const [showSchedule, setShowSchedule] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [historyPos, setHistoryPos] = useState<{ top: number; left: number } | null>(null);
   const HISTORY_PANEL_WIDTH = 320; // matches the panel's w-80
@@ -996,6 +998,14 @@ export default function Dashboard() {
                         <GitCompare className="h-3.5 w-3.5" />
                         <span>Compare</span>
                       </button>
+                      <button
+                        onClick={() => setShowSchedule(true)}
+                        className="flex shrink-0 items-center space-x-1.5 rounded-lg border border-slate-700 bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs font-semibold text-white transition focus:outline-none"
+                        title="Re-crawl this domain on a schedule"
+                      >
+                        <CalendarClock className="h-3.5 w-3.5" />
+                        <span>Schedule</span>
+                      </button>
                     </div>
                   </div>
 
@@ -1122,6 +1132,9 @@ export default function Dashboard() {
       {selectedUrl && <PageDetailModal page={selectedUrl} onClose={() => setSelectedUrl(null)} />}
       {showCompare && jobDetails && (
         <CompareModal jobId={jobDetails.id} domain={jobDetails.domain} onClose={() => setShowCompare(false)} />
+      )}
+      {showSchedule && jobDetails && (
+        <ScheduleModal jobId={jobDetails.id} domain={jobDetails.domain} onClose={() => setShowSchedule(false)} />
       )}
     </div>
   );

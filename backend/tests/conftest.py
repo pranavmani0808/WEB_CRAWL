@@ -29,12 +29,13 @@ from app.models.crawl_comparison import CrawlComparison
 from app.models.token_blocklist import TokenBlocklist
 from app.models.session import Session
 from app.models.url_snapshot import UrlSnapshot
+from app.models.crawl_schedule import CrawlSchedule
 
 DOCUMENT_MODELS = [
     User, Domain, CrawlJob, URL, Sitemap, Subdomain,
     CrawlLog, CrawlStatistics, Report, Export,
     CrawlHistory, CrawlComparison, TokenBlocklist, Session,
-    UrlSnapshot,
+    UrlSnapshot, CrawlSchedule,
 ]
 
 

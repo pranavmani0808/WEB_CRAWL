@@ -17,7 +17,8 @@ from app.models.crawl_statistics import CrawlStatistics
 from app.models.user import User
 from app.models.report import Report
 from app.models.url_snapshot import UrlSnapshot
-from app.workers.tasks import crawl_domain_task
+from app.models.crawl_schedule import CrawlSchedule
+from app.workers.tasks import crawl_domain_task, SCHEDULE_INTERVALS
 from app.reports.pdf_generator import generate_crawl_pdf
 import uuid
 from urllib.parse import urlparse
@@ -761,3 +762,103 @@ async def delete_crawl_job(job_id: str, current_user: User = Depends(get_current
     await job.delete()
     return {"message": "Job deleted", "job_id": job_id}
 
+
+
+# ---------------------------------------------------------------------------
+# Scheduled / recurring audits
+# ---------------------------------------------------------------------------
+
+from datetime import datetime as _datetime
+
+
+class ScheduleRequest(BaseModel):
+    frequency: str
+
+    @field_validator("frequency")
+    @classmethod
+    def validate_frequency(cls, v: str) -> str:
+        v = v.strip().lower()
+        if v not in SCHEDULE_INTERVALS:
+            raise ValueError(f"frequency must be one of: {', '.join(SCHEDULE_INTERVALS)}")
+        return v
+
+
+async def _schedule_public(s: CrawlSchedule, domains_map: dict = None) -> dict:
+    if domains_map is not None:
+        domain = domains_map.get(s.domain_id)
+    else:
+        domain = await Domain.get(s.domain_id)
+    return {
+        "id": str(s.id),
+        "domain_id": str(s.domain_id),
+        "domain": domain.domain if domain else "unknown",
+        "frequency": s.frequency,
+        "enabled": s.enabled,
+        "next_run_at": s.next_run_at.isoformat() if s.next_run_at else None,
+        "last_run_at": s.last_run_at.isoformat() if s.last_run_at else None,
+    }
+
+
+@app.post("/api/crawl/jobs/{job_id}/schedule", tags=["Schedules"])
+async def create_schedule_for_job(job_id: str, req: ScheduleRequest, current_user: User = Depends(get_current_user)):
+    """Create (or update) a recurring audit for the domain a job crawled.
+
+    One schedule per (user, domain): scheduling an already-scheduled domain
+    just changes its frequency. The first scheduled run is one interval from
+    now - the user typically just crawled the domain manually.
+    """
+    try:
+        job_uuid = uuid.UUID(job_id)
+    except ValueError:
+        return JSONResponse(status_code=400, content={"message": "Invalid job ID format"})
+
+    job = await CrawlJob.get(job_uuid)
+    if not job or job.user_id != current_user.id:
+        return JSONResponse(status_code=404, content={"message": "Job not found"})
+
+    schedule = await CrawlSchedule.find_one(
+        CrawlSchedule.domain_id == job.domain_id,
+        CrawlSchedule.user_id == current_user.id,
+    )
+    next_run = _datetime.utcnow() + SCHEDULE_INTERVALS[req.frequency]
+    if schedule:
+        schedule.frequency = req.frequency
+        schedule.enabled = True
+        schedule.next_run_at = next_run
+        await schedule.save()
+    else:
+        schedule = CrawlSchedule(
+            domain_id=job.domain_id,
+            user_id=current_user.id,
+            frequency=req.frequency,
+            next_run_at=next_run,
+        )
+        await schedule.insert()
+
+    return await _schedule_public(schedule)
+
+
+@app.get("/api/crawl/schedules", tags=["Schedules"])
+async def list_schedules(current_user: User = Depends(get_current_user)):
+    """List the current user's recurring audits."""
+    schedules = await CrawlSchedule.find(CrawlSchedule.user_id == current_user.id).to_list()
+    domain_ids = list({s.domain_id for s in schedules})
+    domains = await Domain.find({"_id": {"$in": domain_ids}}).to_list() if domain_ids else []
+    domains_map = {d.id: d for d in domains}
+    return [await _schedule_public(s, domains_map) for s in schedules]
+
+
+@app.delete("/api/crawl/schedules/{schedule_id}", tags=["Schedules"])
+async def delete_schedule(schedule_id: str, current_user: User = Depends(get_current_user)):
+    """Remove a recurring audit."""
+    try:
+        schedule_uuid = uuid.UUID(schedule_id)
+    except ValueError:
+        return JSONResponse(status_code=400, content={"message": "Invalid schedule ID format"})
+
+    schedule = await CrawlSchedule.get(schedule_uuid)
+    if not schedule or schedule.user_id != current_user.id:
+        return JSONResponse(status_code=404, content={"message": "Schedule not found"})
+
+    await schedule.delete()
+    return {"message": "Schedule deleted", "schedule_id": schedule_id}

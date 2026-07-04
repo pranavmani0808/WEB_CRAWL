@@ -28,5 +28,15 @@ if settings.CELERY_BROKER_URL.startswith("rediss://"):
 
 celery_app.conf.update(celery_config)
 
+# Recurring-audit dispatcher, run by the beat service. Checks every ~5
+# minutes for CrawlSchedules whose next_run_at has passed - the schedule
+# granularity is hourly at the finest, so this cadence is plenty.
+celery_app.conf.beat_schedule = {
+    "dispatch-due-crawl-schedules": {
+        "task": "app.workers.tasks.dispatch_due_schedules",
+        "schedule": 300.0,
+    },
+}
+
 # Discover tasks from app.workers.tasks
 celery_app.autodiscover_tasks(["app.workers"])

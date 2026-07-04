@@ -28,6 +28,7 @@ async def init_db():
     from app.models.token_blocklist import TokenBlocklist
     from app.models.session import Session
     from app.models.url_snapshot import UrlSnapshot
+    from app.models.crawl_schedule import CrawlSchedule
 
     await init_beanie(
         database=_mongodb_client.WEB_CRAWL,
@@ -35,7 +36,7 @@ async def init_db():
             User, Domain, CrawlJob, URL, Sitemap, Subdomain,
             CrawlLog, CrawlStatistics, Report, Export,
             CrawlHistory, CrawlComparison, TokenBlocklist, Session,
-            UrlSnapshot
+            UrlSnapshot, CrawlSchedule
         ]
     )
 
