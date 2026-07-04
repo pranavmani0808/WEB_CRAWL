@@ -28,4 +28,4 @@ if ! python3 -c "import celery" 2>/dev/null; then
 fi
 
 # Start the worker
-celery -A app.workers.celery_app worker --loglevel=info --concurrency=6
+celery -A app.workers.celery_app worker --loglevel=info --concurrency=4

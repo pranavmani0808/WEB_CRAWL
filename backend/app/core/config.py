@@ -52,6 +52,11 @@ class Settings(BaseSettings):
     # Pages larger than this are status-checked but not HTML-parsed; a soup
     # of a multi-MB page costs ~10x its size in RAM, times N workers.
     CRAWLER_MAX_PARSE_BYTES: int = 1_500_000
+
+    # Hard cap on how many bytes of any response body are downloaded at all.
+    # Without this a single sitemap-listed video/PDF/binary could pull
+    # hundreds of MB into the worker in one go.
+    CRAWLER_MAX_FETCH_BYTES: int = 3_000_000
     CRAWLER_TIMEOUT_SECONDS: int = 30
     CRAWLER_RESPECT_ROBOTS_TXT: bool = True
     CRAWLER_FOLLOW_REDIRECTS: bool = True

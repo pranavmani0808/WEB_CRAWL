@@ -14,6 +14,11 @@ celery_config = {
     "accept_content": ["json"],
     "timezone": "UTC",
     "enable_utc": True,
+    # Recycle each prefork child after a handful of crawls: CPython rarely
+    # returns freed memory to the OS, so a child that once crawled a heavy
+    # site keeps its peak RSS forever - on a 1GB container that ratchet is
+    # what eventually gets the worker OOM-killed.
+    "worker_max_tasks_per_child": 5,
 }
 
 # Enable SSL/TLS for Upstash Redis (rediss:// protocol)

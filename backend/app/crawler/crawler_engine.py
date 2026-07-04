@@ -702,14 +702,17 @@ class CrawlerEngine:
             task = asyncio.create_task(crawl_and_release(url_obj))
             running_tasks.add(task)
 
-        # Main polling loop to check for new dynamically queued URLs (link-discovered
-        # during the crawl). 1s is plenty responsive here and avoids hammering Atlas
-        # with a full collection scan 10x/sec for the entire crawl duration. Also
-        # doubles as the cancellation check interval - a "Cancel" request needs the
-        # in-flight tasks actually torn down here, not just detected, otherwise
-        # they'd keep running detached after execute() moves on.
+        # Main polling loop. The 1s tick is the cancellation check (cheap
+        # single-doc read); the pending-URL scan is a *fallback* for anything
+        # enqueue_discovered missed and runs only every 5th tick, as a
+        # projection of {_id, url} rather than full documents - on a
+        # several-thousand-URL site, materializing every pending document
+        # once per second was tens of MB of allocation churn per second for
+        # the entire crawl (a real contributor to OOM-killing the worker).
+        poll_tick = 0
         while True:
             await asyncio.sleep(1.0)
+            poll_tick += 1
 
             current = await CrawlJob.get(self.job.id)
             if current and current.status == CrawlJobStatus.STOPPING.value:
@@ -719,13 +722,24 @@ class CrawlerEngine:
                 await self._update_job_progress()
                 raise CrawlCancelledError()
 
-            pending_urls = await URL.find(
+            # Scan on every 5th tick, or immediately when all tasks have
+            # drained (so completion isn't delayed and the final "anything
+            # left?" check is never skipped).
+            if poll_tick % 5 != 0 and running_tasks:
+                continue
+
+            pending_rows = await URL.find(
                 URL.domain_id == self.domain.id,
                 URL.crawl_status == URLCrawlStatus.PENDING.value
-            ).to_list(None)
+            ).aggregate([{"$project": {"_id": 1, "url": 1}}]).to_list()
 
-            # Filter out URLs already in queue or processing
-            new_urls = [u for u in pending_urls if u.url not in active_urls]
+            # Filter out URLs already in queue or processing; only fetch full
+            # documents for the (rare) genuinely-new ones.
+            unseen_ids = [r["_id"] for r in pending_rows if r.get("url") not in active_urls]
+            new_urls = (
+                await URL.find({"_id": {"$in": unseen_ids}}).to_list()
+                if unseen_ids else []
+            )
 
             # If no pending URLs and no active crawl tasks remain, we are completely done!
             if not new_urls and not running_tasks:
@@ -755,43 +769,55 @@ class CrawlerEngine:
         logger.info(f"Crawl HTTP request started: {url_obj.url}")
 
         try:
-            # Fetch URL
-            response = await client.get(url_obj.url, timeout=self.job.timeout_seconds)
-            response_time_ms = int((time.time() - start_time) * 1000)
+            # Fetch URL, streaming the body so a single huge response (video,
+            # PDF, a multi-MB page) can never pull more than
+            # CRAWLER_MAX_FETCH_BYTES into memory. client.get() would buffer
+            # the entire body before we could look at its size.
+            body = bytearray()
+            truncated = False
+            async with client.stream("GET", url_obj.url, timeout=self.job.timeout_seconds) as response:
+                await self._note_response_for_backoff(response.status_code)
 
-            await self._note_response_for_backoff(response.status_code)
+                # Update URL details (first phase commit)
+                url_obj.status_code = response.status_code
+                url_obj.final_url = str(response.url)
+                url_obj.content_type = response.headers.get("content-type", "").split(";")[0].strip()
 
-            # Update URL details (first phase commit)
-            url_obj.status_code = response.status_code
-            url_obj.final_url = str(response.url)
-            url_obj.response_time_ms = response_time_ms
-            url_obj.content_type = response.headers.get("content-type", "").split(";")[0].strip()
-            url_obj.content_length = int(response.headers.get("content-length", 0))
+                async for chunk in response.aiter_bytes():
+                    body += chunk
+                    if len(body) > settings.CRAWLER_MAX_FETCH_BYTES:
+                        truncated = True
+                        break
 
-            # Categorize status code
-            if 200 <= response.status_code < 300:
-                url_obj.status_category = URLStatusCategory.SUCCESS.value
-            elif 300 <= response.status_code < 400:
-                url_obj.status_category = URLStatusCategory.REDIRECT.value
-            elif 400 <= response.status_code < 500:
-                url_obj.status_category = URLStatusCategory.CLIENT_ERROR.value
-            elif response.status_code >= 500:
-                url_obj.status_category = URLStatusCategory.SERVER_ERROR.value
+                response_time_ms = int((time.time() - start_time) * 1000)
+                url_obj.response_time_ms = response_time_ms
+                header_length = response.headers.get("content-length")
+                url_obj.content_length = int(header_length) if header_length else len(body)
+                charset = response.charset_encoding or "utf-8"
 
-            # Extract redirects
-            redirects = []
-            if response.history:
-                redirects = [str(r.url) for r in response.history]
-            url_obj.redirect_chain = redirects
-            # (saved once at the end, together with the SEO/issue fields below -
-            # each url_obj.save() is its own Atlas round-trip, and this one was
-            # entirely redundant with the final save a few lines down.)
+                # Categorize status code
+                if 200 <= response.status_code < 300:
+                    url_obj.status_category = URLStatusCategory.SUCCESS.value
+                elif 300 <= response.status_code < 400:
+                    url_obj.status_category = URLStatusCategory.REDIRECT.value
+                elif 400 <= response.status_code < 500:
+                    url_obj.status_category = URLStatusCategory.CLIENT_ERROR.value
+                elif response.status_code >= 500:
+                    url_obj.status_category = URLStatusCategory.SERVER_ERROR.value
+
+                # Extract redirects
+                redirects = []
+                if response.history:
+                    redirects = [str(r.url) for r in response.history]
+                url_obj.redirect_chain = redirects
+                # (saved once at the end, together with the SEO/issue fields
+                # below - each url_obj.save() is its own Atlas round-trip.)
 
             # Extract SEO data
             seo_data = None
             issues = []
             soup = None
-            oversized = len(response.content) > settings.CRAWLER_MAX_PARSE_BYTES
+            oversized = truncated or len(body) > settings.CRAWLER_MAX_PARSE_BYTES
             if oversized:
                 # Status/headers are already recorded above - just skip the
                 # HTML parse. A soup of a multi-MB page costs ~10x its size
@@ -800,11 +826,12 @@ class CrawlerEngine:
                 await self.log_event(
                     "warning",
                     f"Skipping content audit for {url_obj.url} - page is "
-                    f"{len(response.content) // 1024}KB (limit {settings.CRAWLER_MAX_PARSE_BYTES // 1024}KB)",
+                    f"{len(body) // 1024}KB{'+' if truncated else ''} (limit {settings.CRAWLER_MAX_PARSE_BYTES // 1024}KB)",
                     event_type="page_too_large", entity_type="url", entity_id=str(url_obj.id),
                 )
             if "text/html" in url_obj.content_type and not oversized:
-                html_content = response.text
+                html_content = bytes(body).decode(charset, errors="replace")
+                del body
                 try:
                     # HTML parsing + tag walking is CPU-bound and was running
                     # inline on the event loop, blocking every other concurrent
