@@ -20,6 +20,25 @@ import AuditPreviewCard from "@/components/AuditPreviewCard";
 // Configure base API url
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+// The backend emits naive-UTC ISO timestamps (no timezone suffix). Parsing
+// them directly makes the browser assume LOCAL time, which is fine when
+// diffing two server timestamps against each other, but wrong when diffing
+// against Date.now() for a live timer. Append "Z" so they're read as UTC.
+const parseServerTime = (s: string): number =>
+  new Date(/[Z+]|[+-]\d\d:\d\d$/.test(s) ? s : s + "Z").getTime();
+
+// Human-readable elapsed time: "45s", "3m 09s", "1h 04m 09s".
+const formatDuration = (totalSeconds: number): string => {
+  const t = Math.max(0, Math.floor(totalSeconds));
+  const h = Math.floor(t / 3600);
+  const m = Math.floor((t % 3600) / 60);
+  const s = t % 60;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  if (h > 0) return `${h}h ${pad(m)}m ${pad(s)}s`;
+  if (m > 0) return `${m}m ${pad(s)}s`;
+  return `${s}s`;
+};
+
 interface CrawlJob {
   id: string;
   status: string;
@@ -116,6 +135,8 @@ export default function Dashboard() {
   const [loadingUrlId, setLoadingUrlId] = useState<string | null>(null);
   const [showCompare, setShowCompare] = useState(false);
   const [showSchedule, setShowSchedule] = useState(false);
+  // Ticks every second so the Duration counts up live while a crawl runs.
+  const [nowTs, setNowTs] = useState(() => Date.now());
   const [showHistory, setShowHistory] = useState(false);
   const [historyPos, setHistoryPos] = useState<{ top: number; left: number } | null>(null);
   const HISTORY_PANEL_WIDTH = 320; // matches the panel's w-80
@@ -341,6 +362,16 @@ export default function Dashboard() {
     const interval = setInterval(() => loadJobDetails(activeJobId), 3000);
     return () => clearInterval(interval);
   }, [activeJobId, jobDetails?.status]);
+
+  // Tick the live clock once a second, but only while the viewed job is
+  // actually running/pending - a completed job's duration is fixed, so
+  // there's no reason to keep re-rendering.
+  const isJobLive = jobDetails?.status === "running" || jobDetails?.status === "pending";
+  useEffect(() => {
+    if (!isJobLive) return;
+    const id = setInterval(() => setNowTs(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [isJobLive]);
 
   // Refresh the audited-URL table only when the crawl has actually made
   // progress (checked-count moved) or settled into a final state - not on
@@ -670,11 +701,16 @@ export default function Dashboard() {
                     </div>
                     <div>
                       <div className="text-xs text-slate-400">Duration</div>
-                      <div className="text-sm font-semibold text-white">
+                      <div className="text-sm font-semibold text-white tabular-nums">
                         {jobDetails.started_at ? (
                            jobDetails.completed_at ? (
-                             `${Math.round((new Date(jobDetails.completed_at).getTime() - new Date(jobDetails.started_at).getTime()) / 1000)}s`
-                           ) : "Running..."
+                             formatDuration((parseServerTime(jobDetails.completed_at) - parseServerTime(jobDetails.started_at)) / 1000)
+                           ) : (
+                             <span className="inline-flex items-center gap-1.5">
+                               <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                               {formatDuration((nowTs - parseServerTime(jobDetails.started_at)) / 1000)}
+                             </span>
+                           )
                         ) : "-"}
                       </div>
                     </div>
