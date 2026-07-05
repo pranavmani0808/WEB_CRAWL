@@ -782,9 +782,15 @@ class CrawlerEngine:
         db_lock - only self.job/self.domain mutations (shared across all tasks)
         do, and only around the increment+save itself, not the whole request.
         """
-        url_obj.crawl_status = URLCrawlStatus.CHECKING.value
+        # Increment the attempt counter in memory only - it's persisted by the
+        # single terminal save below (CHECKED or FAILED). The old code did a
+        # full extra Atlas round-trip here just to flip the row to "checking",
+        # but the polling loop already dedupes in-flight URLs via the in-memory
+        # `active_urls` set, so that write bought nothing except ~33% more DB
+        # traffic on the hot path (every URL: checking-save + final-save). If
+        # the worker dies mid-page the row simply stays "pending" and the
+        # reaper re-queues it - which is exactly what we want anyway.
         url_obj.crawl_attempt += 1
-        await url_obj.save()
 
         start_time = time.time()
         logger.info(f"Crawl HTTP request started: {url_obj.url}")
