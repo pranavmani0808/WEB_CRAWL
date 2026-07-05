@@ -131,6 +131,9 @@ async def test_update_job_progress_aggregates_status_buckets(mongo_db):
     engine = CrawlerEngine(job.id)
     engine.job = job
     engine.domain = domain
+    # Simulate the drift bug: the in-memory counter is wildly wrong. The
+    # flush must overwrite it with the DB-derived truth.
+    job.total_urls_checked = 3
     await engine._update_job_progress()
 
     assert job.urls_2xx == 2
@@ -141,6 +144,54 @@ async def test_update_job_progress_aggregates_status_buckets(mongo_db):
     assert job.urls_dns_error == 1
     assert job.avg_response_time_ms == int((100 + 300 + 50 + 150) / 4)
     assert job.crawl_speed_urls_per_sec is not None
+
+    # total_urls_checked must be derived from the DB and reconcile exactly
+    # with the status distribution - the "132 / 183" bug was this counter
+    # drifting below the true count.
+    bucket_sum = (job.urls_2xx + job.urls_3xx + job.urls_4xx + job.urls_5xx
+                  + job.urls_timeout + job.urls_dns_error + job.urls_ssl_error)
+    assert job.total_urls_checked == 7
+    assert job.total_urls_checked == bucket_sum
+
+
+async def test_total_urls_checked_counts_failed_urls_as_attempted(mongo_db):
+    """A fully-crawled site should read 100% even when some pages failed:
+    FAILED URLs (timeout/connection errors) count toward total_urls_checked,
+    not just successful ones - otherwise the progress bar sticks below 100%.
+    """
+    from datetime import datetime, timedelta
+    from app.models.crawl_job import CrawlJob as CrawlJobModel
+
+    domain = Domain(user_id=uuid.uuid4(), original_url="https://f.com",
+                    normalized_url="https://f.com", domain="f.com")
+    await domain.insert()
+    job = CrawlJobModel(domain_id=domain.id, user_id=uuid.uuid4(), status="running")
+    job.started_at = datetime.utcnow() - timedelta(minutes=5)
+    await job.insert()
+
+    # 3 checked (2 ok, 1 broken) + 2 failed = 5 attempted total.
+    specs = [
+        (URLCrawlStatus.CHECKED.value, 200, "success"),
+        (URLCrawlStatus.CHECKED.value, 200, "success"),
+        (URLCrawlStatus.CHECKED.value, 404, "client_error"),
+        (URLCrawlStatus.FAILED.value, None, "timeout"),
+        (URLCrawlStatus.FAILED.value, None, "dns_error"),
+    ]
+    for i, (st, code, cat) in enumerate(specs):
+        await URL(domain_id=domain.id, sitemap_id=uuid.uuid4(),
+                  url=f"https://f.com/{i}", url_hash=f"f-{i}",
+                  crawl_status=st, status_code=code, status_category=cat).insert()
+
+    engine = CrawlerEngine(job.id)
+    engine.job = job
+    engine.domain = domain
+    await engine._update_job_progress()
+
+    assert job.total_urls_checked == 5
+    assert job.urls_2xx == 2
+    assert job.urls_4xx == 1
+    assert job.urls_timeout == 1
+    assert job.urls_dns_error == 1
 
 
 async def test_reset_domain_urls_for_recrawl_clears_previously_checked_urls(mongo_db):

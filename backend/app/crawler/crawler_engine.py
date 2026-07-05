@@ -78,9 +78,13 @@ class CrawlerEngine:
         # Set from the job's configured value, then possibly throttled down in
         # execute() if this domain was crawled recently - see _throttle_for_recrawl.
         self.effective_max_workers = None
-        # Tracks the last total_urls_checked value we synced stats at, and
-        # guards the sync itself - see _crawl_single_url for why this can't
-        # just be "checked % 10 == 0" under concurrency.
+        # Monotonic in-memory tally of pages finished, used ONLY to pace the
+        # periodic stats flush (every ~10 pages). It deliberately does NOT feed
+        # the displayed total_urls_checked - that's derived from the DB in
+        # _update_job_progress so it can't drift. _last_progress_sync marks the
+        # tally value at the previous flush; the guard avoids "checked % 10"
+        # which is unreliable under concurrency.
+        self._pages_finished = 0
         self._last_progress_sync = 0
         self._progress_sync_lock = asyncio.Lock()
         # Cached after first lookup so link discovery doesn't take db_lock and
@@ -951,16 +955,6 @@ class CrawlerEngine:
             url_obj.seo_issues = []
             url_obj.redirect_chain = []
 
-            # self.job/self.domain are shared across all concurrent tasks, so the
-            # increment is kept under the lock. Persisting to Mongo on every
-            # single page added ~2 Atlas round-trips (hundreds of ms each) to
-            # the lock's critical section, capping the whole crawl's throughput
-            # to roughly 1/that-latency regardless of concurrency - the counter
-            # is flushed periodically instead (see _update_job_progress below).
-            async with self.db_lock:
-                self.job.total_urls_checked += 1
-                self.domain.crawled_urls += 1
-
         except httpx.TimeoutException as e:
             url_obj.crawl_status = URLCrawlStatus.FAILED.value
             url_obj.status_category = URLStatusCategory.TIMEOUT.value
@@ -990,9 +984,10 @@ class CrawlerEngine:
         # sync silently never fires until the crawl fully completes. Track
         # the last synced count instead and trigger on "at least 10 since".
         async with self._progress_sync_lock:
-            should_sync = self.job.total_urls_checked - self._last_progress_sync >= 10
+            self._pages_finished += 1
+            should_sync = self._pages_finished - self._last_progress_sync >= 10
             if should_sync:
-                self._last_progress_sync = self.job.total_urls_checked
+                self._last_progress_sync = self._pages_finished
         if should_sync:
             await self._update_job_progress()
 
@@ -1043,7 +1038,7 @@ class CrawlerEngine:
             # previous jobs of the same domain.
             rows = await URL.find(
                 URL.domain_id == self.domain.id,
-                URL.crawl_status == URLCrawlStatus.CHECKED.value,
+                {"crawl_status": {"$in": [URLCrawlStatus.CHECKED.value, URLCrawlStatus.FAILED.value]}},
                 URL.updated_at >= self.job.started_at
             ).aggregate([
                 {"$group": {
@@ -1076,14 +1071,20 @@ class CrawlerEngine:
             self.job.urls_dns_error = count_of("dns")
             self.job.urls_ssl_error = count_of("ssl")
 
+            # Derive total_urls_checked from the database, NOT the in-memory
+            # per-page counter. That counter drifts under concurrency (a
+            # completed 183-URL crawl was persisting values like 24/132),
+            # leaving the progress bar stuck below 100% and disagreeing with
+            # the status distribution - which is computed from this very same
+            # aggregation, so the two now always reconcile by construction.
+            self.job.total_urls_checked = total_checked
+            self.domain.crawled_urls = total_checked
+
             # Calculate speed
             elapsed_sec = (datetime.utcnow() - self.job.started_at).total_seconds()
             if elapsed_sec > 0:
                 self.job.crawl_speed_urls_per_sec = round(total_checked / elapsed_sec, 2)
 
-            # self.job.total_urls_checked and self.domain.crawled_urls are kept
-            # up to date in-memory per-page (see _crawl_single_url) and only
-            # flushed to Mongo here, periodically, instead of on every page.
             self.job.last_activity_at = datetime.utcnow()
             await self.job.save()
             await self.domain.save()
