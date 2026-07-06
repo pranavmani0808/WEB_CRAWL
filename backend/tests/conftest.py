@@ -64,6 +64,11 @@ async def app_client(mongo_db, monkeypatch):
     monkeypatch.setattr(main_module, "close_db", _noop_lifecycle)
     monkeypatch.setattr(crawl_domain_task, "delay", lambda *args, **kwargs: None)
 
+    # Disable auth rate limiting by default so the many login/register calls
+    # across the suite don't trip the limiter and cause order-dependent 429s.
+    # The dedicated rate-limit test re-enables it explicitly.
+    main_module.limiter.enabled = False
+
     transport = ASGITransport(app=main_module.app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
         yield client

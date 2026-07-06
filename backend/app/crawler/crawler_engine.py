@@ -31,6 +31,11 @@ from app.crawler.seo_extractor import SEOExtractor
 from app.crawler.sitemap_parser import SitemapParser
 from app.crawler.issue_detector import IssueDetector
 from app.crawler.js_renderer import JsRenderer, looks_js_rendered
+from app.crawler import ssrf_guard
+
+
+class SSRFBlockedError(Exception):
+    """Raised when a URL points at an internal/private address (SSRF guard)."""
 
 logger = logging.getLogger(__name__)
 
@@ -800,6 +805,14 @@ class CrawlerEngine:
         logger.info(f"Crawl HTTP request started: {url_obj.url}")
 
         try:
+            # SSRF guard: refuse to fetch internal/private addresses (cloud
+            # metadata, *.railway.internal, loopback, RFC-1918). Runs in a
+            # thread because it may do a blocking DNS lookup. Checked here so
+            # both sitemap-declared and link-discovered URLs are covered.
+            reason = await asyncio.to_thread(ssrf_guard.blocked_reason, url_obj.url)
+            if reason:
+                raise SSRFBlockedError(reason)
+
             # Fetch URL, streaming the body so a single huge response (video,
             # PDF, a multi-MB page) can never pull more than
             # CRAWLER_MAX_FETCH_BYTES into memory. client.get() would buffer
@@ -807,6 +820,14 @@ class CrawlerEngine:
             body = bytearray()
             truncated = False
             async with client.stream("GET", url_obj.url, timeout=self.job.timeout_seconds) as response:
+                # A public URL can 302 into an internal one (httpx follows
+                # redirects automatically). Re-check the final address and
+                # discard the response without reading its body if it landed
+                # somewhere internal, so internal content is never returned.
+                final_reason = await asyncio.to_thread(ssrf_guard.blocked_reason, str(response.url))
+                if final_reason:
+                    raise SSRFBlockedError(f"redirected to blocked target: {final_reason}")
+
                 await self._note_response_for_backoff(response.status_code)
 
                 # Update URL details (first phase commit)
@@ -954,6 +975,13 @@ class CrawlerEngine:
             url_obj.meta_data = {}
             url_obj.seo_issues = []
             url_obj.redirect_chain = []
+
+        except SSRFBlockedError as e:
+            url_obj.crawl_status = URLCrawlStatus.FAILED.value
+            url_obj.status_category = URLStatusCategory.NETWORK_ERROR.value
+            url_obj.error_details = f"Blocked by SSRF guard: {str(e)}"
+            await url_obj.save()
+            await self.log_event("warning", f"Blocked internal/private URL {url_obj.url}: {str(e)}", event_type="ssrf_blocked", entity_type="url", entity_id=str(url_obj.id))
 
         except httpx.TimeoutException as e:
             url_obj.crawl_status = URLCrawlStatus.FAILED.value

@@ -20,9 +20,24 @@ from app.models.url_snapshot import UrlSnapshot
 from app.models.crawl_schedule import CrawlSchedule
 from app.workers.tasks import crawl_domain_task, SCHEDULE_INTERVALS
 from app.reports.pdf_generator import generate_crawl_pdf
+from app.crawler import ssrf_guard
 import uuid
 from urllib.parse import urlparse
 from pydantic import BaseModel, Field, field_validator
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+
+
+def _client_ip(request: Request) -> str:
+    """Real client IP for rate limiting. Behind Railway's proxy the socket
+    peer is the proxy, so prefer the first X-Forwarded-For entry."""
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+limiter = Limiter(key_func=_client_ip)
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -32,6 +47,11 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
 )
+
+# Rate limiting (slowapi): protects auth endpoints from brute-force /
+# mass-registration. Returns HTTP 429 when a client exceeds the limit.
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # MongoDB Lifecycle
 @app.on_event("startup")
@@ -160,7 +180,8 @@ def _user_public(user: User) -> dict:
 
 
 @app.post("/api/auth/register", tags=["Auth"])
-async def register(req: RegisterRequest):
+@limiter.limit("5/minute")
+async def register(request: Request, req: RegisterRequest):
     """Create a new user account."""
     existing = await User.find_one(User.email == req.email)
     if existing:
@@ -185,7 +206,8 @@ async def register(req: RegisterRequest):
 
 
 @app.post("/api/auth/login", tags=["Auth"])
-async def login(req: LoginRequest):
+@limiter.limit("10/minute")
+async def login(request: Request, req: LoginRequest):
     """Authenticate with email + password and receive JWT tokens."""
     user = await User.find_one(User.email == req.email.strip().lower())
     if not user or not verify_password(req.password, user.password_hash):
@@ -227,6 +249,15 @@ async def start_crawl_endpoint(req: CrawlRequest, current_user: User = Depends(g
     # separate domain records for the same site - which then collided on the
     # global-unique url_hash index and crashed re-crawls.
     domain_name = (parsed.netloc or parsed.path.split('/')[0]).lower()
+
+    # SSRF guard at the entry point: reject internal/private targets before we
+    # ever fetch robots.txt/sitemaps/pages from them. The crawler enforces
+    # this again per-URL (defense in depth), but blocking here stops the very
+    # first request. DNS lookup is blocking, so run it off the event loop.
+    import asyncio as _asyncio
+    ssrf_reason = await _asyncio.to_thread(ssrf_guard.blocked_reason, f"{parsed.scheme.lower()}://{domain_name}")
+    if ssrf_reason:
+        return JSONResponse(status_code=400, content={"message": f"This URL can't be crawled: {ssrf_reason}"})
 
     user_id = current_user.id
 
