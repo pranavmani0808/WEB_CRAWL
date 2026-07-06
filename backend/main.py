@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from fastapi import Depends, FastAPI, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, Response
@@ -176,7 +176,14 @@ class AuthResponse(BaseModel):
 
 
 def _user_public(user: User) -> dict:
-    return {"id": str(user.id), "email": user.email, "username": user.username}
+    return {"id": str(user.id), "email": user.email, "username": user.username, "is_admin": user.is_admin}
+
+
+async def get_current_admin(current_user: User = Depends(get_current_user)) -> User:
+    """Auth dependency that requires the caller to be an admin."""
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return current_user
 
 
 @app.post("/api/auth/register", tags=["Auth"])
@@ -912,3 +919,122 @@ async def delete_schedule(schedule_id: str, current_user: User = Depends(get_cur
 
     await schedule.delete()
     return {"message": "Schedule deleted", "schedule_id": schedule_id}
+
+
+# ---------------------------------------------------------------------------
+# Admin dashboard (admin-only)
+# ---------------------------------------------------------------------------
+
+from datetime import timedelta as _timedelta
+
+
+@app.get("/api/admin/overview", tags=["Admin"])
+async def admin_overview(admin: User = Depends(get_current_admin)):
+    """High-level platform metrics for the admin dashboard."""
+    now = _datetime.utcnow()
+    week_ago = now - _timedelta(days=7)
+
+    total_users = await User.find().count()
+    active_users = await User.find(User.is_active == True).count()  # noqa: E712
+    new_users_7d = await User.find(User.created_at >= week_ago).count()
+
+    total_jobs = await CrawlJob.find().count()
+    running_jobs = await CrawlJob.find({"status": {"$in": ["running", "pending", "stopping"]}}).count()
+    completed_jobs = await CrawlJob.find(CrawlJob.status == "completed").count()
+    failed_jobs = await CrawlJob.find(CrawlJob.status == "failed").count()
+    jobs_7d = await CrawlJob.find(CrawlJob.created_at >= week_ago).count()
+
+    total_domains = await Domain.find().count()
+
+    # Total URLs audited across the platform (sum of a denormalized counter).
+    urls_rows = await CrawlJob.find().aggregate([
+        {"$group": {"_id": None, "total": {"$sum": "$total_urls_checked"}}}
+    ]).to_list()
+    total_urls_checked = urls_rows[0]["total"] if urls_rows else 0
+
+    return {
+        "users": {"total": total_users, "active": active_users, "new_last_7d": new_users_7d},
+        "crawls": {
+            "total": total_jobs, "running": running_jobs, "completed": completed_jobs,
+            "failed": failed_jobs, "last_7d": jobs_7d,
+        },
+        "domains": total_domains,
+        "total_urls_checked": total_urls_checked,
+        "generated_at": now.isoformat(),
+    }
+
+
+@app.get("/api/admin/users", tags=["Admin"])
+async def admin_list_users(admin: User = Depends(get_current_admin)):
+    """Every user with their crawl counts, computed in one pass."""
+    users = await User.find().sort("-created_at").to_list()
+
+    # Aggregate per-user crawl stats in one query instead of N.
+    stats_rows = await CrawlJob.find().aggregate([
+        {"$group": {
+            "_id": "$user_id",
+            "total_crawls": {"$sum": 1},
+            "active_crawls": {"$sum": {"$cond": [{"$in": ["$status", ["running", "pending", "stopping"]]}, 1, 0]}},
+            "urls_checked": {"$sum": "$total_urls_checked"},
+            "last_crawl_at": {"$max": "$created_at"},
+        }},
+    ]).to_list()
+
+    def _uid(v):
+        if isinstance(v, uuid.UUID):
+            return str(v)
+        try:
+            return str(uuid.UUID(bytes=bytes(v)))
+        except (TypeError, ValueError):
+            return str(v)
+
+    stats_by_user = {_uid(r["_id"]): r for r in stats_rows if r.get("_id") is not None}
+
+    result = []
+    for u in users:
+        s = stats_by_user.get(str(u.id), {})
+        last = s.get("last_crawl_at")
+        result.append({
+            "id": str(u.id),
+            "email": u.email,
+            "username": u.username,
+            "is_active": u.is_active,
+            "is_admin": u.is_admin,
+            "created_at": u.created_at.isoformat() if u.created_at else None,
+            "total_crawls": s.get("total_crawls", 0),
+            "active_crawls": s.get("active_crawls", 0),
+            "urls_checked": s.get("urls_checked", 0),
+            "last_crawl_at": last.isoformat() if hasattr(last, "isoformat") else None,
+        })
+    return result
+
+
+@app.get("/api/admin/users/{user_id}/crawls", tags=["Admin"])
+async def admin_user_crawls(user_id: str, admin: User = Depends(get_current_admin)):
+    """A specific user's crawl history (most recent first)."""
+    try:
+        uid = uuid.UUID(user_id)
+    except ValueError:
+        return JSONResponse(status_code=400, content={"message": "Invalid user ID"})
+
+    target = await User.get(uid)
+    if not target:
+        return JSONResponse(status_code=404, content={"message": "User not found"})
+
+    jobs = await CrawlJob.find(CrawlJob.user_id == uid).sort("-created_at").limit(100).to_list()
+    domain_ids = list({j.domain_id for j in jobs})
+    domains = await Domain.find({"_id": {"$in": domain_ids}}).to_list() if domain_ids else []
+    dmap = {d.id: d for d in domains}
+
+    return {
+        "user": {"id": str(target.id), "email": target.email, "username": target.username},
+        "crawls": [{
+            "id": str(j.id),
+            "domain": dmap.get(j.domain_id).domain if dmap.get(j.domain_id) else "unknown",
+            "status": j.status,
+            "total_urls_checked": j.total_urls_checked,
+            "total_urls_found": j.total_urls_found,
+            "created_at": j.created_at.isoformat() if j.created_at else None,
+            "completed_at": j.completed_at.isoformat() if j.completed_at else None,
+        } for j in jobs],
+    }

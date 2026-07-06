@@ -7,7 +7,7 @@ import axios from "axios";
 import {
   Play, RotateCw, Globe,
   Clock, Activity, Check, Terminal, List, Search,
-  Download, LogOut, Eye, Gauge, BarChart3, Sparkles, History, Square, Trash2, FileText, GitCompare, CalendarClock
+  Download, LogOut, Eye, Gauge, BarChart3, Sparkles, History, Square, Trash2, FileText, GitCompare, CalendarClock, ShieldCheck
 } from "lucide-react";
 import { restoreSession, clearSession, AuthUser } from "@/lib/auth";
 import Homepage, { PENDING_URL_KEY } from "@/components/Homepage";
@@ -571,6 +571,16 @@ export default function Dashboard() {
                 </div>
                 <span className="hidden max-w-[8rem] truncate text-xs font-medium text-slate-300 sm:inline">{user.username}</span>
               </div>
+              {user.is_admin && (
+                <button
+                  onClick={() => router.push("/admin")}
+                  className="flex items-center space-x-1 rounded-lg border border-indigo-500/30 bg-indigo-500/10 px-2 py-1.5 text-xs text-indigo-300 transition hover:border-indigo-500/50 hover:text-indigo-200 sm:py-1"
+                  title="Admin dashboard"
+                >
+                  <ShieldCheck className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">Admin</span>
+                </button>
+              )}
               <button
                 onClick={handleLogout}
                 className="flex items-center space-x-1 rounded-lg border border-slate-800 px-2 py-1.5 text-xs text-slate-400 transition hover:border-red-500/30 hover:text-red-400 sm:py-1"
