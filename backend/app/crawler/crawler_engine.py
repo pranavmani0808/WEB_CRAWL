@@ -545,9 +545,15 @@ class CrawlerEngine:
 
                 # 3. Add URLs for this sitemap to the database
                 for url_entry in sdata.get('urls', []):
+                    # Fairness (B): stop once this crawl hits its URL budget,
+                    # so one domain with a giant sitemap can't run for hours
+                    # and hog a worker slot from other users.
+                    if total_urls >= settings.CRAWLER_MAX_URLS_PER_CRAWL:
+                        break
+
                     url_str = url_entry['url']
                     url_clean_hash = get_url_hash(url_str)
-                    
+
                     if url_clean_hash in added_urls:
                         continue
                     added_urls.add(url_clean_hash)
@@ -1412,8 +1418,10 @@ class CrawlerEngine:
         """Extract all internal links from soup and queue them as pending if not already existing"""
         from urllib.parse import urljoin, urlparse
         
-        # Enforce max limit of 10,000 URLs to avoid infinite crawl loops
-        if self.job.total_urls_found >= 10000:
+        # Enforce the per-crawl URL budget (fairness B) - also stops infinite
+        # crawl loops on link-heavy sites.
+        max_urls = settings.CRAWLER_MAX_URLS_PER_CRAWL
+        if self.job.total_urls_found >= max_urls:
             return
 
         links = soup.find_all('a', href=True)
@@ -1459,7 +1467,7 @@ class CrawlerEngine:
 
         async with self.db_lock:
             # Recheck limit inside the lock to be safe
-            if self.job.total_urls_found >= 10000:
+            if self.job.total_urls_found >= max_urls:
                 return
 
             # Re-filter against the cache under the lock in case another
@@ -1475,7 +1483,7 @@ class CrawlerEngine:
             existing_hashes = {u.url_hash for u in existing_docs}
             self._known_url_hashes.update(existing_hashes)
 
-            remaining_capacity = 10000 - self.job.total_urls_found
+            remaining_capacity = max_urls - self.job.total_urls_found
             new_docs = [
                 URL(
                     id=uuid.uuid4(),

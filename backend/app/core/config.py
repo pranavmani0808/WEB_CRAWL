@@ -59,6 +59,15 @@ class Settings(BaseSettings):
     CRAWLER_MAX_FETCH_BYTES: int = 3_000_000
     CRAWLER_TIMEOUT_SECONDS: int = 30
     CRAWLER_RESPECT_ROBOTS_TXT: bool = True
+
+    # Fairness / resource-guard knobs for multi-user operation:
+    # (A) how many crawls one user may have queued+running at once - stops a
+    #     single user from monopolizing every worker slot.
+    MAX_CONCURRENT_CRAWLS_PER_USER: int = 2
+    # (B) hard cap on how many URLs a single crawl will ever process, across
+    #     both sitemap-declared and link-discovered URLs - stops one crawl
+    #     from running for hours and starving the queue.
+    CRAWLER_MAX_URLS_PER_CRAWL: int = 5000
     CRAWLER_FOLLOW_REDIRECTS: bool = True
 
     # JavaScript rendering (headless Chromium for SPA pages)

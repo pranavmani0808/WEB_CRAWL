@@ -239,6 +239,21 @@ class CrawlRequest(BaseModel):
 @app.post("/api/crawl", tags=["Crawl"])
 async def start_crawl_endpoint(req: CrawlRequest, current_user: User = Depends(get_current_user)):
     """Start a crawl job for the specified URL"""
+    # Fairness (A): cap how many crawls one user can have in flight at once so
+    # a single user can't fill every worker slot and starve everyone else.
+    active_count = await CrawlJob.find(
+        CrawlJob.user_id == current_user.id,
+        {"status": {"$in": ["pending", "running", "stopping"]}},
+    ).count()
+    if active_count >= settings.MAX_CONCURRENT_CRAWLS_PER_USER:
+        return JSONResponse(
+            status_code=429,
+            content={"message": (
+                f"You already have {active_count} crawls running. "
+                f"Please wait for one to finish (limit {settings.MAX_CONCURRENT_CRAWLS_PER_USER} at a time)."
+            )},
+        )
+
     url = req.url.strip()
     if not url.startswith(('http://', 'https://')):
         url = 'https://' + url
